@@ -1,0 +1,1277 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FIDAMAR · Quadratura Cassa</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%226%22%20fill%3D%22%230f172a%22%2F%3E%3Ctext%20x%3D%2216%22%20y%3D%2222%22%20font-family%3D%22system-ui%22%20font-size%3D%2218%22%20font-weight%3D%22bold%22%20fill%3D%22%23fff%22%20text-anchor%3D%22middle%22%3E%E2%82%AC%3C%2Ftext%3E%3C%2Fsvg%3E">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1",
+    "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
+    "xlsx": "https://esm.sh/xlsx@0.18.5"
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; }
+  #loader { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #f8fafc; z-index: 50; flex-direction: column; gap: 1rem; }
+  #loader.hidden { display: none; }
+  .spinner { width: 32px; height: 32px; border: 3px solid #cbd5e1; border-top-color: #0f172a; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="loader"><div class="spinner"></div><div style="color:#64748b;font-size:14px">Caricamento webdesk...</div></div>
+<div id="root"></div>
+<script type="text/babel" data-type="module" data-presets="react">
+import React, { useState, useEffect, useMemo } from 'react';
+import ReactDOM from 'react-dom/client';
+import * as XLSX from 'xlsx';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, PieChart, Pie, Cell } from 'recharts';
+import {
+  Archive, BarChart3, Save, Trash2, Download, Upload, ChevronLeft, ChevronRight,
+  Check, X, AlertTriangle, Wallet, FileText, Plus, Search, Eye,
+  Banknote, CreditCard, Smartphone, Ticket, Receipt, ArrowRightLeft, Users,
+  FileSpreadsheet, Calendar as CalendarIcon
+} from 'lucide-react';
+
+// ============== CONFIG ==============
+const OPERATORS = ['Fabrizio', 'Ilaria', 'Valerio'];
+
+// ============== STORAGE LAYER (localStorage per v1 demo) ==============
+const STORAGE_PREFIX = 'quadratura:';
+const db = {
+  async get(date) {
+    try {
+      const v = localStorage.getItem(`${STORAGE_PREFIX}${date}`);
+      return v ? JSON.parse(v) : null;
+    } catch { return null; }
+  },
+  async set(date, data) {
+    try {
+      localStorage.setItem(`${STORAGE_PREFIX}${date}`, JSON.stringify(data));
+      return true;
+    } catch { return false; }
+  },
+  async delete(date) {
+    try { localStorage.removeItem(`${STORAGE_PREFIX}${date}`); return true; }
+    catch { return false; }
+  },
+  async list() {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k);
+      }
+      return keys;
+    } catch { return []; }
+  },
+  async getAll() {
+    const keys = await this.list();
+    const items = [];
+    for (const k of keys) {
+      const date = k.replace(STORAGE_PREFIX, '');
+      const data = await this.get(date);
+      if (data) items.push({ date, ...data });
+    }
+    return items.sort((a, b) => b.date.localeCompare(a.date));
+  },
+  async importBatch(records) {
+    let added = 0, updated = 0;
+    for (const rec of records) {
+      if (!rec.date) continue;
+      const existing = await this.get(rec.date);
+      const { date, ...rest } = rec;
+      await this.set(date, rest);
+      if (existing) updated++; else added++;
+    }
+    return { added, updated };
+  }
+};
+
+// ============== HELPERS ==============
+const fmtEur = (n) => {
+  if (n === 0 || n === null || n === undefined || isNaN(n)) return '—';
+  return new Intl.NumberFormat('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n) + ' €';
+};
+const fmtEurZero = (n) => {
+  if (n === null || n === undefined || isNaN(n)) return '0,00 €';
+  return new Intl.NumberFormat('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n) + ' €';
+};
+const fmtDateIT = (iso) => {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+};
+const today = () => new Date().toISOString().split('T')[0];
+const monthName = (m) => ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'][m];
+
+const emptyQuadratura = () => ({
+  operatori: '',
+  apertura: { cassaforte: '', glory: '' },
+  incassi: { contanti: '', pos: '', satispay: '', ticket: '', pagopa: '' },
+  corrispettivi: '',
+  movimenti: {
+    consegnaMonete: '',
+    speseCash: '',
+    versamentoBanca: '',
+    rimborsiCash: '',
+    ritiroValori: ''
+  },
+  interni: { rifornimentoGlory: '', svuotamentoGlory: '' },
+  fisico: { cassaforte: '', glory: '' },
+  note: ''
+});
+
+const num = (v) => {
+  const n = parseFloat(String(v).replace(',', '.'));
+  return isNaN(n) ? 0 : n;
+};
+
+const calc = (q) => {
+  const a = q.apertura || {};
+  const i = q.incassi || {};
+  const m = q.movimenti || {};
+  const x = q.interni || {};
+  const f = q.fisico || {};
+
+  const apCassaforte = num(a.cassaforte);
+  const apGlory = num(a.glory);
+  const totApertura = apCassaforte + apGlory;
+
+  const inContanti = num(i.contanti);
+  const inPos = num(i.pos);
+  const inSatispay = num(i.satispay);
+  const inTicket = num(i.ticket);
+  const inPagopa = num(i.pagopa);
+  const totIncassi = inContanti + inPos + inSatispay + inTicket + inPagopa;
+  const corrispettivi = num(q.corrispettivi);
+  const quadraturaIncassi = corrispettivi - totIncassi;
+
+  const consegnaMonete = num(m.consegnaMonete);
+  const speseCash = num(m.speseCash);
+  const versamentoBanca = num(m.versamentoBanca);
+  const rimborsiCash = num(m.rimborsiCash);
+  const ritiroValori = num(m.ritiroValori);
+
+  const rifornimentoGlory = num(x.rifornimentoGlory);
+  const svuotamentoGlory = num(x.svuotamentoGlory);
+
+  const teoricoCassaforte = apCassaforte
+    + consegnaMonete
+    + svuotamentoGlory
+    - speseCash
+    - versamentoBanca
+    - rimborsiCash
+    - rifornimentoGlory;
+
+  const teoricoGlory = apGlory
+    + inContanti
+    + rifornimentoGlory
+    - ritiroValori
+    - svuotamentoGlory;
+
+  const teoricoTot = teoricoCassaforte + teoricoGlory;
+
+  const fisCassaforte = num(f.cassaforte);
+  const fisGlory = num(f.glory);
+  const fisicoTot = fisCassaforte + fisGlory;
+
+  const diffCassaforte = teoricoCassaforte - fisCassaforte;
+  const diffGlory = teoricoGlory - fisGlory;
+  const quadraturaContante = teoricoTot - fisicoTot;
+
+  return {
+    apCassaforte, apGlory, totApertura,
+    inContanti, inPos, inSatispay, inTicket, inPagopa,
+    totIncassi, corrispettivi, quadraturaIncassi,
+    teoricoCassaforte, teoricoGlory, teoricoTot,
+    fisCassaforte, fisGlory, fisicoTot,
+    diffCassaforte, diffGlory, quadraturaContante
+  };
+};
+
+// ============== UI COMPONENTS ==============
+const StatusBadge = ({ value, label = '' }) => {
+  if (Math.abs(value) < 0.02) {
+    return (
+      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded border border-emerald-200 text-xs font-semibold">
+        <Check size={12} /> {label || 'OK'}
+      </div>
+    );
+  }
+  return (
+    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-rose-50 text-rose-700 rounded border border-rose-200 text-xs font-semibold">
+      <AlertTriangle size={12} /> {fmtEur(value)}
+    </div>
+  );
+};
+
+const Field = ({ label, hint, value, onChange, color = 'amber', icon: Icon }) => {
+  const colors = {
+    amber: 'border-amber-200 bg-amber-50/40 focus-within:bg-white focus-within:border-amber-400',
+    slate: 'border-slate-200 bg-slate-50/40 focus-within:bg-white focus-within:border-slate-400',
+    indigo: 'border-indigo-200 bg-indigo-50/40 focus-within:bg-white focus-within:border-indigo-400'
+  };
+  return (
+    <div className="grid grid-cols-[1fr_140px] items-center gap-3 py-2 border-b border-slate-100 last:border-b-0">
+      <div className="flex items-start gap-2">
+        {Icon && <Icon size={14} className="text-slate-400 mt-0.5 flex-shrink-0" />}
+        <div>
+          <div className="text-sm font-medium text-slate-800">{label}</div>
+          {hint && <div className="text-xs text-slate-500 mt-0.5">{hint}</div>}
+        </div>
+      </div>
+      <div className={`flex items-center gap-1 px-3 py-2 border rounded-md transition-colors ${colors[color]}`}>
+        <input
+          type="text"
+          inputMode="decimal"
+          placeholder="0,00"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className="w-full bg-transparent outline-none text-right text-sm font-mono"
+        />
+        <span className="text-slate-400 text-xs">€</span>
+      </div>
+    </div>
+  );
+};
+
+const Section = ({ title, icon: Icon, color, children, totale, totaleLabel }) => (
+  <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+    <div className={`px-4 py-2.5 border-b flex items-center justify-between ${color}`}>
+      <div className="flex items-center gap-2 font-semibold text-sm">
+        <Icon size={16} /> {title}
+      </div>
+      {totale !== undefined && (
+        <div className="font-mono text-sm font-semibold flex items-center gap-2">
+          {totaleLabel && <span className="text-xs opacity-70 font-normal">{totaleLabel}</span>}
+          {fmtEur(totale)}
+        </div>
+      )}
+    </div>
+    <div className="px-4 py-1">{children}</div>
+  </div>
+);
+
+// ============== QUADRATURA FORM ==============
+const QuadraturaForm = ({ initialDate, onSaved }) => {
+  const [date, setDate] = useState(initialDate || today());
+  const [q, setQ] = useState(emptyQuadratura());
+  const [loading, setLoading] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [existing, setExisting] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      const data = await db.get(date);
+      const empty = emptyQuadratura();
+      if (mounted) {
+        if (data) {
+          setQ({ ...empty, ...data,
+            apertura: { ...empty.apertura, ...(data.apertura || {}) },
+            incassi: { ...empty.incassi, ...(data.incassi || {}) },
+            movimenti: { ...empty.movimenti, ...(data.movimenti || {}) },
+            interni: { ...empty.interni, ...(data.interni || {}) },
+            fisico: { ...empty.fisico, ...(data.fisico || {}) }
+          });
+          setExisting(true);
+        } else {
+          setQ(empty);
+          setExisting(false);
+        }
+        setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [date]);
+
+  const c = useMemo(() => calc(q), [q]);
+
+  const update = (path, value) => {
+    setQ(prev => {
+      const next = { ...prev };
+      const keys = path.split('.');
+      let target = next;
+      for (let i = 0; i < keys.length - 1; i++) {
+        target[keys[i]] = { ...target[keys[i]] };
+        target = target[keys[i]];
+      }
+      target[keys[keys.length - 1]] = value;
+      return next;
+    });
+    setSaved(false);
+  };
+
+  const handleSave = async () => {
+    const dataToSave = { ...q, updatedAt: new Date().toISOString() };
+    const ok = await db.set(date, dataToSave);
+    if (ok) {
+      setSaved(true);
+      setExisting(true);
+      onSaved?.(date);
+      setTimeout(() => setSaved(false), 2000);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm(`Eliminare la quadratura del ${fmtDateIT(date)}?`)) return;
+    await db.delete(date);
+    setQ(emptyQuadratura());
+    setExisting(false);
+    onSaved?.();
+  };
+
+  if (loading) return <div className="text-slate-500 text-sm">Caricamento...</div>;
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg p-5 text-white">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <button onClick={() => {
+              const d = new Date(date);
+              d.setDate(d.getDate() - 1);
+              setDate(d.toISOString().split('T')[0]);
+            }} className="p-1.5 hover:bg-white/10 rounded transition">
+              <ChevronLeft size={18} />
+            </button>
+            <input
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              className="bg-transparent border border-white/20 rounded px-3 py-1.5 text-sm focus:bg-white/10 focus:outline-none"
+            />
+            <button onClick={() => {
+              const d = new Date(date);
+              d.setDate(d.getDate() + 1);
+              setDate(d.toISOString().split('T')[0]);
+            }} className="p-1.5 hover:bg-white/10 rounded transition">
+              <ChevronRight size={18} />
+            </button>
+            <div className="text-xs uppercase tracking-wider text-white/60 ml-2">
+              {existing ? 'Esistente' : 'Nuova'}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Users size={16} className="text-white/60" />
+            <span className="text-xs uppercase tracking-wider text-white/60 mr-1">Operatori:</span>
+            {OPERATORS.map(name => {
+              const selected = (q.operatori || '').split(',').map(s => s.trim()).filter(Boolean);
+              const isSel = selected.includes(name);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => {
+                    const curr = (q.operatori || '').split(',').map(s => s.trim()).filter(Boolean);
+                    const idx = curr.indexOf(name);
+                    if (idx >= 0) curr.splice(idx, 1);
+                    else curr.push(name);
+                    update('operatori', curr.join(', '));
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition border ${
+                    isSel
+                      ? 'bg-white text-slate-900 border-white'
+                      : 'bg-white/5 text-white/80 border-white/20 hover:bg-white/10'
+                  }`}
+                >
+                  {isSel && <Check size={12} />}
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Sezione INCASSI */}
+      <Section title="Incassi per forma di pagamento" icon={Receipt}
+        color="bg-emerald-50 text-emerald-800 border-emerald-200"
+        totale={c.totIncassi} totaleLabel="Totale incassato">
+        <Field label="Contanti" hint="Incassi in contante (entrano in glory)" icon={Banknote}
+          value={q.incassi.contanti} onChange={v => update('incassi.contanti', v)} />
+        <Field label="POS / Carte" hint="Bancomat, credito, prepagate" icon={CreditCard}
+          value={q.incassi.pos} onChange={v => update('incassi.pos', v)} />
+        <Field label="Satispay" hint="Pagamenti tramite app Satispay" icon={Smartphone}
+          value={q.incassi.satispay} onChange={v => update('incassi.satispay', v)} />
+        <Field label="Ticket pasto" hint="Cartacei + digitali, importo totale" icon={Ticket}
+          value={q.incassi.ticket} onChange={v => update('incassi.ticket', v)} />
+        <Field label="PagoPA" hint="Bollette, affitti ATER, tributi" icon={FileText}
+          value={q.incassi.pagopa} onChange={v => update('incassi.pagopa', v)} />
+      </Section>
+
+      <Section title="Corrispettivi (verifica incassi)" icon={Receipt}
+        color="bg-indigo-50 text-indigo-800 border-indigo-200">
+        <Field label="Corrispettivi totali da scontrini fiscali"
+          hint="Devono coincidere con la somma incassi"
+          color="indigo"
+          value={q.corrispettivi} onChange={v => update('corrispettivi', v)} />
+        <div className="py-3 flex items-center justify-between border-t border-slate-100 mt-1">
+          <div className="text-sm font-semibold text-slate-700">
+            Quadratura incassi
+            <span className="text-xs font-normal text-slate-500 ml-2">(corrispettivi − incassi)</span>
+          </div>
+          <StatusBadge value={c.quadraturaIncassi} label="Quadrata" />
+        </div>
+      </Section>
+
+      {/* Separatore */}
+      <div className="pt-4 mt-2 border-t-2 border-slate-200">
+        <div className="text-xs uppercase tracking-widest text-slate-500 font-bold mb-3">Contante fisico — cassaforte e glory</div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Section title="Apertura giornata" icon={Wallet}
+          color="bg-slate-100 text-slate-800 border-slate-200" totale={c.totApertura}>
+          <Field label="Cassaforte" hint="Riporto dal giorno precedente"
+            value={q.apertura.cassaforte} onChange={v => update('apertura.cassaforte', v)} />
+          <Field label="Glory" hint="Lettura software a inizio giornata"
+            value={q.apertura.glory} onChange={v => update('apertura.glory', v)} />
+        </Section>
+
+        <Section title="Chiusura — conteggio fisico" icon={Wallet}
+          color="bg-indigo-50 text-indigo-800 border-indigo-200" totale={c.fisicoTot}>
+          <Field label="Cassaforte conteggiata" hint="Conteggio manuale fine giornata" color="indigo"
+            value={q.fisico.cassaforte} onChange={v => update('fisico.cassaforte', v)} />
+          <Field label="Glory" hint="Lettura software fine giornata" color="indigo"
+            value={q.fisico.glory} onChange={v => update('fisico.glory', v)} />
+        </Section>
+
+        <Section title="Movimenti contante in entrata" icon={Plus}
+          color="bg-emerald-50 text-emerald-800 border-emerald-200">
+          <Field label="Consegna monete (società A)"
+            hint="Società che porta monete → in cassaforte"
+            value={q.movimenti.consegnaMonete} onChange={v => update('movimenti.consegnaMonete', v)} />
+          <div className="py-2">
+            <div className="text-sm font-medium text-slate-500 italic">
+              Incassi contanti clienti → vanno in glory
+              <span className="text-xs text-slate-400 ml-2">(inseriti nella sezione incassi)</span>
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Movimenti contante in uscita" icon={X}
+          color="bg-rose-50 text-rose-800 border-rose-200">
+          <Field label="Spese / pagamenti cash" hint="→ da cassaforte"
+            value={q.movimenti.speseCash} onChange={v => update('movimenti.speseCash', v)} />
+          <Field label="Versamento banca" hint="→ da cassaforte"
+            value={q.movimenti.versamentoBanca} onChange={v => update('movimenti.versamentoBanca', v)} />
+          <Field label="Rimborsi clienti cash" hint="→ da cassaforte"
+            value={q.movimenti.rimborsiCash} onChange={v => update('movimenti.rimborsiCash', v)} />
+          <Field label="Ritiro valori (società B)" hint="→ da glory (importo totale)"
+            value={q.movimenti.ritiroValori} onChange={v => update('movimenti.ritiroValori', v)} />
+        </Section>
+
+        <Section title="Trasferimenti interni" icon={ArrowRightLeft}
+          color="bg-amber-50 text-amber-800 border-amber-200">
+          <Field label="Rifornimento glory" hint="Cassaforte → glory" color="slate"
+            value={q.interni.rifornimentoGlory} onChange={v => update('interni.rifornimentoGlory', v)} />
+          <Field label="Svuotamento glory" hint="Glory → cassaforte" color="slate"
+            value={q.interni.svuotamentoGlory} onChange={v => update('interni.svuotamentoGlory', v)} />
+        </Section>
+
+        {/* Riepilogo contante */}
+        <div className="bg-slate-900 text-white rounded-lg overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-white/10 font-semibold text-sm flex items-center gap-2">
+            <FileText size={16} /> Riepilogo contante
+          </div>
+          <div className="p-4 space-y-1.5 font-mono text-sm">
+            <div className="flex justify-between py-1 border-b border-white/10">
+              <span className="text-white/70">Teorico cassaforte</span>
+              <span className="font-semibold">{fmtEurZero(c.teoricoCassaforte)}</span>
+            </div>
+            <div className="flex justify-between py-1 border-b border-white/10">
+              <span className="text-white/70">Teorico glory</span>
+              <span className="font-semibold">{fmtEurZero(c.teoricoGlory)}</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-white/10 text-base">
+              <span className="text-white/90">TEORICO</span>
+              <span className="font-bold">{fmtEurZero(c.teoricoTot)}</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-white/10 text-base">
+              <span className="text-white/90">FISICO</span>
+              <span className="font-bold">{fmtEurZero(c.fisicoTot)}</span>
+            </div>
+            <div className="flex justify-between py-2 mt-2 px-2 -mx-2 rounded bg-white/10">
+              <span className="font-semibold">QUADRATURA</span>
+              <span className={`font-bold ${Math.abs(c.quadraturaContante) < 0.02 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                {fmtEurZero(c.quadraturaContante)}
+              </span>
+            </div>
+            {Math.abs(c.diffCassaforte) >= 0.02 && (
+              <div className="text-xs text-amber-300 mt-2 px-2 py-1 bg-amber-500/10 rounded">
+                ⚠ Diff. cassaforte: {fmtEur(c.diffCassaforte)}
+              </div>
+            )}
+            {Math.abs(c.diffGlory) >= 0.02 && (
+              <div className="text-xs text-amber-300 mt-1 px-2 py-1 bg-amber-500/10 rounded">
+                ⚠ Diff. glory: {fmtEur(c.diffGlory)}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Stato globale */}
+      <div className="bg-white border border-slate-200 rounded-lg p-4 flex items-center justify-between flex-wrap gap-3">
+        <div className="text-sm font-semibold text-slate-800">Stato giornata</div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Incassi:</span>
+            <StatusBadge value={c.quadraturaIncassi} label="Quadrata" />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Contante:</span>
+            <StatusBadge value={c.quadraturaContante} label="Quadrata" />
+          </div>
+        </div>
+      </div>
+
+      {/* Note */}
+      <div className="bg-white border border-slate-200 rounded-lg p-4">
+        <label className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Note del giorno</label>
+        <textarea
+          value={q.note}
+          onChange={e => update('note', e.target.value)}
+          placeholder="Eventi rilevanti, anomalie, segnalazioni per l'ufficio..."
+          className="w-full mt-2 px-3 py-2 border border-slate-200 rounded-md text-sm focus:outline-none focus:border-slate-400 resize-none"
+          rows={2}
+        />
+      </div>
+
+      {/* Azioni */}
+      <div className="flex items-center justify-between gap-3 pt-2">
+        <div>
+          {existing && (
+            <button onClick={handleDelete}
+              className="inline-flex items-center gap-2 px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-md text-sm font-medium transition">
+              <Trash2 size={16} /> Elimina
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {saved && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><Check size={16} /> Salvato</span>}
+          <button onClick={handleSave}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-md text-sm font-semibold transition shadow-sm">
+            <Save size={16} /> Salva quadratura
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============== CALENDARIO ==============
+const Calendario = ({ items, onSelect, selectedDate }) => {
+  const [month, setMonth] = useState(new Date().getMonth());
+  const [year, setYear] = useState(new Date().getFullYear());
+
+  const itemsByDate = useMemo(() => {
+    const map = {};
+    items.forEach(it => {
+      const c = calc(it);
+      const ok = Math.abs(c.quadraturaContante) < 0.02 && Math.abs(c.quadraturaIncassi) < 0.02;
+      map[it.date] = { exists: true, ok };
+    });
+    return map;
+  }, [items]);
+
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startWeekday = (firstDay.getDay() + 6) % 7;
+
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= lastDay.getDate(); d++) {
+    const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    cells.push({ day: d, iso, info: itemsByDate[iso] });
+  }
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+        <button onClick={() => {
+          if (month === 0) { setMonth(11); setYear(year - 1); } else setMonth(month - 1);
+        }} className="p-1.5 hover:bg-slate-200 rounded transition">
+          <ChevronLeft size={18} />
+        </button>
+        <div className="font-semibold text-slate-800">{monthName(month)} {year}</div>
+        <button onClick={() => {
+          if (month === 11) { setMonth(0); setYear(year + 1); } else setMonth(month + 1);
+        }} className="p-1.5 hover:bg-slate-200 rounded transition">
+          <ChevronRight size={18} />
+        </button>
+      </div>
+      <div className="p-3">
+        <div className="grid grid-cols-7 gap-1 mb-2">
+          {['L','M','M','G','V','S','D'].map((d, i) => (
+            <div key={i} className="text-center text-xs font-semibold text-slate-400 py-1">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-1">
+          {cells.map((cell, i) => {
+            if (!cell) return <div key={i} />;
+            const isSelected = cell.iso === selectedDate;
+            const isToday = cell.iso === today();
+            const hasData = cell.info?.exists;
+            const isOk = hasData && cell.info.ok;
+            return (
+              <button key={i} onClick={() => onSelect(cell.iso)}
+                className={`
+                  aspect-square rounded-md text-sm font-medium relative transition
+                  ${isSelected ? 'bg-slate-900 text-white' :
+                    hasData ? (isOk ? 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200' : 'bg-rose-50 text-rose-800 hover:bg-rose-100 border border-rose-200') :
+                    'hover:bg-slate-100 text-slate-700'}
+                  ${isToday && !isSelected ? 'ring-2 ring-slate-400' : ''}
+                `}>
+                {cell.day}
+                {hasData && !isSelected && (
+                  <div className={`absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full ${isOk ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-4 mt-4 pt-3 border-t border-slate-100 text-xs text-slate-500">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-emerald-500" /> Tutto quadrato
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-rose-500" /> Squadratura
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============== ARCHIVIO ==============
+const Archivio = ({ items, onSelect }) => {
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+
+  const filtered = useMemo(() => {
+    return items.filter(it => {
+      const c = calc(it);
+      const ok = Math.abs(c.quadraturaContante) < 0.02 && Math.abs(c.quadraturaIncassi) < 0.02;
+      const matchSearch = !search ||
+        it.date.includes(search) ||
+        (it.operatori || '').toLowerCase().includes(search.toLowerCase());
+      const matchFilter = filter === 'all' ||
+        (filter === 'ok' && ok) ||
+        (filter === 'ko' && !ok);
+      return matchSearch && matchFilter;
+    });
+  }, [items, search, filter]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-md flex-1 min-w-[200px]">
+          <Search size={16} className="text-slate-400" />
+          <input type="text" placeholder="Cerca per data o operatore..."
+            value={search} onChange={e => setSearch(e.target.value)}
+            className="bg-transparent outline-none text-sm w-full" />
+        </div>
+        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-md p-1">
+          {[{ v: 'all', l: 'Tutte' },{ v: 'ok', l: '✓ Quadrate' },{ v: 'ko', l: '✗ Squadrate' }].map(opt => (
+            <button key={opt.v} onClick={() => setFilter(opt.v)}
+              className={`px-3 py-1.5 text-xs font-medium rounded transition ${
+                filter === opt.v ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
+              }`}>{opt.l}</button>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-lg p-12 text-center text-slate-500">
+          <Archive size={32} className="mx-auto mb-2 text-slate-300" />
+          <div className="text-sm">Nessuna quadratura trovata</div>
+        </div>
+      ) : (
+        <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr className="text-xs uppercase tracking-wider text-slate-500">
+                <th className="px-4 py-3 text-left font-semibold">Data</th>
+                <th className="px-4 py-3 text-left font-semibold">Operatori</th>
+                <th className="px-4 py-3 text-right font-semibold">Incassi</th>
+                <th className="px-4 py-3 text-right font-semibold">Quadr. incassi</th>
+                <th className="px-4 py-3 text-right font-semibold">Quadr. contante</th>
+                <th className="px-4 py-3 text-center font-semibold">Stato</th>
+                <th className="px-4 py-3 w-8"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(it => {
+                const c = calc(it);
+                const ok = Math.abs(c.quadraturaContante) < 0.02 && Math.abs(c.quadraturaIncassi) < 0.02;
+                return (
+                  <tr key={it.date} className="border-b border-slate-100 hover:bg-slate-50 transition cursor-pointer"
+                    onClick={() => onSelect(it.date)}>
+                    <td className="px-4 py-3 font-mono font-medium">{fmtDateIT(it.date)}</td>
+                    <td className="px-4 py-3 text-slate-700 text-xs">{it.operatori || '—'}</td>
+                    <td className="px-4 py-3 text-right font-mono">{fmtEur(c.totIncassi)}</td>
+                    <td className={`px-4 py-3 text-right font-mono ${Math.abs(c.quadraturaIncassi) < 0.02 ? 'text-slate-400' : 'text-rose-600 font-semibold'}`}>
+                      {Math.abs(c.quadraturaIncassi) < 0.02 ? '✓' : fmtEur(c.quadraturaIncassi)}
+                    </td>
+                    <td className={`px-4 py-3 text-right font-mono ${Math.abs(c.quadraturaContante) < 0.02 ? 'text-slate-400' : 'text-rose-600 font-semibold'}`}>
+                      {Math.abs(c.quadraturaContante) < 0.02 ? '✓' : fmtEur(c.quadraturaContante)}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {ok ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 text-xs font-semibold">
+                          <Check size={14} /> OK
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-rose-700 text-xs font-semibold">
+                          <AlertTriangle size={14} /> KO
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3"><Eye size={14} className="text-slate-400" /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============== STATISTICHE ==============
+const Statistiche = ({ items }) => {
+  const [periodo, setPeriodo] = useState('30');
+
+  const filteredItems = useMemo(() => {
+    const days = parseInt(periodo);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    return items.filter(it => it.date >= cutoffStr).sort((a, b) => a.date.localeCompare(b.date));
+  }, [items, periodo]);
+
+  const chartData = useMemo(() => filteredItems.map(it => {
+    const c = calc(it);
+    return {
+      date: it.date.slice(5).replace('-', '/'),
+      quadraturaContante: Math.abs(c.quadraturaContante) < 0.02 ? 0 : c.quadraturaContante,
+      contanti: c.inContanti, pos: c.inPos, satispay: c.inSatispay, ticket: c.inTicket, pagopa: c.inPagopa
+    };
+  }), [filteredItems]);
+
+  const stats = useMemo(() => {
+    let okGiorni = 0, koContante = 0, koIncassi = 0;
+    let totAmmanco = 0, totEccedenza = 0;
+    let totContanti = 0, totPos = 0, totSatispay = 0, totTicket = 0, totPagopa = 0, totIncassiAll = 0;
+    filteredItems.forEach(it => {
+      const c = calc(it);
+      const okContante = Math.abs(c.quadraturaContante) < 0.02;
+      const okIncassi = Math.abs(c.quadraturaIncassi) < 0.02;
+      if (okContante && okIncassi) okGiorni++;
+      if (!okContante) {
+        koContante++;
+        if (c.quadraturaContante < 0) totAmmanco += Math.abs(c.quadraturaContante);
+        else totEccedenza += c.quadraturaContante;
+      }
+      if (!okIncassi) koIncassi++;
+      totContanti += c.inContanti; totPos += c.inPos; totSatispay += c.inSatispay;
+      totTicket += c.inTicket; totPagopa += c.inPagopa; totIncassiAll += c.totIncassi;
+    });
+    return { tot: filteredItems.length, okGiorni, koContante, koIncassi,
+      totAmmanco, totEccedenza, totContanti, totPos, totSatispay, totTicket, totPagopa, totIncassiAll };
+  }, [filteredItems]);
+
+  const mixData = useMemo(() => [
+    { name: 'Contanti', value: stats.totContanti, color: '#0f172a' },
+    { name: 'POS', value: stats.totPos, color: '#3b82f6' },
+    { name: 'Satispay', value: stats.totSatispay, color: '#f97316' },
+    { name: 'Ticket', value: stats.totTicket, color: '#10b981' },
+    { name: 'PagoPA', value: stats.totPagopa, color: '#8b5cf6' }
+  ].filter(d => d.value > 0), [stats]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h3 className="text-lg font-semibold text-slate-900">Statistiche periodo</h3>
+        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-md p-1">
+          {[{ v: '7', l: '7 giorni' },{ v: '30', l: '30 giorni' },{ v: '90', l: '3 mesi' },{ v: '365', l: 'Anno' }].map(opt => (
+            <button key={opt.v} onClick={() => setPeriodo(opt.v)}
+              className={`px-3 py-1.5 text-xs font-medium rounded transition ${
+                periodo === opt.v ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
+              }`}>{opt.l}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Giornate OK</div>
+          <div className="text-2xl font-bold text-emerald-700 mt-1">{stats.okGiorni}<span className="text-sm font-normal text-slate-400">/{stats.tot}</span></div>
+          <div className="text-xs text-slate-500 mt-1">{stats.tot > 0 ? `${Math.round(stats.okGiorni / stats.tot * 100)}%` : '—'}</div>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">KO Contante</div>
+          <div className="text-2xl font-bold text-rose-700 mt-1">{stats.koContante}</div>
+          <div className="text-xs text-slate-500 mt-1 font-mono">Amm: {fmtEur(stats.totAmmanco)}</div>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">KO Incassi</div>
+          <div className="text-2xl font-bold text-amber-700 mt-1">{stats.koIncassi}</div>
+          <div className="text-xs text-slate-500 mt-1">Mismatch corrispettivi</div>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Incassi totali</div>
+          <div className="text-2xl font-bold text-slate-900 mt-1 font-mono">{fmtEur(stats.totIncassiAll)}</div>
+          <div className="text-xs text-slate-500 mt-1">Tutte le forme</div>
+        </div>
+      </div>
+
+      {chartData.length > 1 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-white border border-slate-200 rounded-lg p-4">
+            <div className="text-sm font-semibold text-slate-800 mb-4">Andamento quadratura contante</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="#94a3b8" />
+                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => `${v}€`} />
+                <Tooltip formatter={v => fmtEur(v)}
+                  contentStyle={{ background: '#0f172a', border: 'none', borderRadius: 6, color: 'white', fontSize: 12 }} />
+                <ReferenceLine y={0} stroke="#64748b" strokeWidth={1} />
+                <Line type="monotone" dataKey="quadraturaContante" stroke="#0f172a" strokeWidth={2} dot={{ fill: '#0f172a', r: 3 }} name="Quadratura" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {mixData.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-lg p-4">
+              <div className="text-sm font-semibold text-slate-800 mb-4">Mix forme di pagamento</div>
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart>
+                  <Pie data={mixData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={75} innerRadius={40} paddingAngle={2}>
+                    {mixData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
+                  </Pie>
+                  <Tooltip formatter={v => fmtEur(v)}
+                    contentStyle={{ background: '#0f172a', border: 'none', borderRadius: 6, color: 'white', fontSize: 12 }} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
+                {mixData.map(d => (
+                  <div key={d.name} className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-sm" style={{ background: d.color }} />
+                    <span className="text-slate-600">{d.name}</span>
+                    <span className="ml-auto font-mono font-semibold text-slate-800">{fmtEur(d.value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {chartData.length > 1 && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="text-sm font-semibold text-slate-800 mb-4">Incassi giornalieri per forma di pagamento</div>
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="#94a3b8" />
+              <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => `${v}€`} />
+              <Tooltip formatter={v => fmtEur(v)}
+                contentStyle={{ background: '#0f172a', border: 'none', borderRadius: 6, color: 'white', fontSize: 12 }} />
+              <Bar dataKey="contanti" stackId="a" fill="#0f172a" name="Contanti" />
+              <Bar dataKey="pos" stackId="a" fill="#3b82f6" name="POS" />
+              <Bar dataKey="satispay" stackId="a" fill="#f97316" name="Satispay" />
+              <Bar dataKey="ticket" stackId="a" fill="#10b981" name="Ticket" />
+              <Bar dataKey="pagopa" stackId="a" fill="#8b5cf6" name="PagoPA" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {chartData.length === 0 && (
+        <div className="bg-white border border-slate-200 rounded-lg p-12 text-center text-slate-500">
+          <BarChart3 size={32} className="mx-auto mb-2 text-slate-300" />
+          <div className="text-sm">Nessun dato nel periodo selezionato</div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============== APP ==============
+function App() {
+  const [tab, setTab] = useState('inserimento');
+  const [selectedDate, setSelectedDate] = useState(today());
+  const [items, setItems] = useState([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [lastExportDate, setLastExportDate] = useState(() => localStorage.getItem('lastExportDate') || '');
+
+  // Aggiorna data ultimo export quando cambia (per banner promemoria)
+  useEffect(() => {
+    if (lastExportDate) localStorage.setItem('lastExportDate', lastExportDate);
+  }, [lastExportDate]);
+
+  // Quadratura di oggi presente ma non ancora esportata?
+  const todayQuadraturaExists = useMemo(() => items.some(it => it.date === today()), [items]);
+  const showExportReminder = todayQuadraturaExists && lastExportDate !== today();
+
+  useEffect(() => {
+    (async () => {
+      const all = await db.getAll();
+      setItems(all);
+    })();
+  }, [refreshKey]);
+
+  const handleSaved = () => setRefreshKey(k => k + 1);
+
+  const exportJSON = async () => {
+    const all = await db.getAll();
+    const blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `quadrature_${today()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Conversione record → riga Excel piatta
+  const flattenForExcel = (it) => {
+    const c = calc(it);
+    const okIncassi = Math.abs(c.quadraturaIncassi) < 0.02;
+    const okContante = Math.abs(c.quadraturaContante) < 0.02;
+    return {
+      'Data': fmtDateIT(it.date),
+      'Operatori': it.operatori || '',
+      // Incassi
+      'Contanti': num(it.incassi?.contanti),
+      'POS': num(it.incassi?.pos),
+      'Satispay': num(it.incassi?.satispay),
+      'Ticket': num(it.incassi?.ticket),
+      'PagoPA': num(it.incassi?.pagopa),
+      'Totale incassi': c.totIncassi,
+      'Corrispettivi scontrini': c.corrispettivi,
+      'Quadr. incassi': c.quadraturaIncassi,
+      'Esito incassi': okIncassi ? 'OK' : 'KO',
+      // Apertura
+      'Apertura cassaforte': c.apCassaforte,
+      'Apertura glory': c.apGlory,
+      // Movimenti
+      'Consegna monete': num(it.movimenti?.consegnaMonete),
+      'Spese cash': num(it.movimenti?.speseCash),
+      'Versamento banca': num(it.movimenti?.versamentoBanca),
+      'Rimborsi cash': num(it.movimenti?.rimborsiCash),
+      'Ritiro valori': num(it.movimenti?.ritiroValori),
+      'Rifornimento glory': num(it.interni?.rifornimentoGlory),
+      'Svuotamento glory': num(it.interni?.svuotamentoGlory),
+      // Chiusura
+      'Teorico cassaforte': c.teoricoCassaforte,
+      'Teorico glory': c.teoricoGlory,
+      'Fisico cassaforte': c.fisCassaforte,
+      'Fisico glory': c.fisGlory,
+      'Diff. cassaforte': c.diffCassaforte,
+      'Diff. glory': c.diffGlory,
+      'Quadr. contante': c.quadraturaContante,
+      'Esito contante': okContante ? 'OK' : 'KO',
+      // Stato globale
+      'Stato giornata': (okIncassi && okContante) ? 'OK' : 'KO',
+      'Note': it.note || ''
+    };
+  };
+
+  const buildWorkbook = (records, sheetName = 'Quadrature') => {
+    const rows = records.map(flattenForExcel);
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Larghezza colonne automatica (ragionevole)
+    const colWidths = Object.keys(rows[0] || {}).map(k => ({
+      wch: Math.max(k.length, 14)
+    }));
+    ws['!cols'] = colWidths;
+    // Formato numerico Euro per le colonne numeriche
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const headerRow = rows[0] ? Object.keys(rows[0]) : [];
+    for (let R = 1; R <= range.e.r; ++R) {
+      for (let C = 0; C <= range.e.c; ++C) {
+        const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+        if (!cell) continue;
+        const header = headerRow[C] || '';
+        const isMoney = !['Data', 'Operatori', 'Esito incassi', 'Esito contante', 'Stato giornata', 'Note'].includes(header);
+        if (isMoney && typeof cell.v === 'number') {
+          cell.t = 'n';
+          cell.z = '#,##0.00 "€"';
+        }
+      }
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    return wb;
+  };
+
+  const downloadWorkbook = (wb, filename) => {
+    XLSX.writeFile(wb, filename);
+    setLastExportDate(today());
+  };
+
+  const exportExcelGiorno = async (date) => {
+    const data = await db.get(date);
+    if (!data) { alert('Nessuna quadratura per questa data.'); return; }
+    const wb = buildWorkbook([{ date, ...data }], `Q. ${fmtDateIT(date)}`);
+    downloadWorkbook(wb, `quadratura_${date}.xlsx`);
+  };
+
+  const exportExcelPeriodo = async (from, to, label) => {
+    const all = await db.getAll();
+    const filtered = all.filter(it => it.date >= from && it.date <= to)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (filtered.length === 0) { alert('Nessuna quadratura in questo periodo.'); return; }
+    const wb = buildWorkbook(filtered, label.slice(0, 31));
+    downloadWorkbook(wb, `quadrature_${label.replace(/\s+/g, '_').toLowerCase()}.xlsx`);
+  };
+
+  const exportExcelOggi = () => exportExcelGiorno(today());
+
+  const exportExcelSettimana = async () => {
+    const d = new Date();
+    const day = d.getDay() || 7; // Domenica = 7
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - day + 1);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const from = monday.toISOString().split('T')[0];
+    const to = sunday.toISOString().split('T')[0];
+    await exportExcelPeriodo(from, to, `settimana_${from}`);
+  };
+
+  const exportExcelMese = async () => {
+    const d = new Date();
+    const from = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`;
+    const lastDay = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+    const to = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+    await exportExcelPeriodo(from, to, `${monthName(d.getMonth())}_${d.getFullYear()}`);
+  };
+
+  const exportExcelTutto = async () => {
+    const all = await db.getAll();
+    if (all.length === 0) { alert('Archivio vuoto.'); return; }
+    const sorted = [...all].sort((a, b) => a.date.localeCompare(b.date));
+    const wb = buildWorkbook(sorted, 'Archivio completo');
+    downloadWorkbook(wb, `archivio_completo_${today()}.xlsx`);
+  };
+
+  const importJSON = async (file) => {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!Array.isArray(data)) {
+        alert('Formato file non valido: serve un array di quadrature.');
+        return;
+      }
+      const result = await db.importBatch(data);
+      handleSaved();
+      alert(`Importazione completata.\n${result.added} nuove quadrature\n${result.updated} aggiornate`);
+    } catch (e) {
+      alert('Errore durante l\'importazione: ' + e.message);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="bg-slate-900 text-white border-b border-slate-800">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-[0.2em] text-white/50 font-semibold">FIDAMAR</div>
+            <div className="text-xl font-bold tracking-tight">Quadratura cassa</div>
+          </div>
+          <div className="flex items-center gap-2 relative">
+            <label className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-white/5 hover:bg-white/10 rounded-md transition border border-white/10 cursor-pointer">
+              <Upload size={14} /> Importa
+              <input type="file" accept="application/json,.json" className="hidden"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) importJSON(f);
+                  e.target.value = '';
+                }} />
+            </label>
+            <div className="relative">
+              <button onClick={() => setExportMenuOpen(o => !o)}
+                className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-white text-slate-900 hover:bg-slate-100 rounded-md transition font-semibold">
+                <Download size={14} /> Esporta ▾
+              </button>
+              {exportMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setExportMenuOpen(false)} />
+                  <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-slate-200 rounded-lg shadow-xl z-20 overflow-hidden text-slate-800">
+                    <div className="px-3 py-2 text-xs uppercase tracking-wider text-slate-500 font-semibold bg-slate-50 border-b border-slate-200">
+                      Excel per cartella condivisa
+                    </div>
+                    <button onClick={() => { setExportMenuOpen(false); exportExcelOggi(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 text-sm flex items-center gap-2 transition">
+                      <FileSpreadsheet size={16} className="text-emerald-600" />
+                      <div>
+                        <div className="font-medium">Quadratura di oggi</div>
+                        <div className="text-xs text-slate-500">Solo {fmtDateIT(today())}</div>
+                      </div>
+                    </button>
+                    <button onClick={() => { setExportMenuOpen(false); exportExcelGiorno(selectedDate); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 text-sm flex items-center gap-2 transition">
+                      <FileSpreadsheet size={16} className="text-emerald-600" />
+                      <div>
+                        <div className="font-medium">Quadratura del giorno selezionato</div>
+                        <div className="text-xs text-slate-500">{fmtDateIT(selectedDate)}</div>
+                      </div>
+                    </button>
+                    <button onClick={() => { setExportMenuOpen(false); exportExcelSettimana(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 text-sm flex items-center gap-2 transition">
+                      <CalendarIcon size={16} className="text-emerald-600" />
+                      <div className="font-medium">Settimana corrente</div>
+                    </button>
+                    <button onClick={() => { setExportMenuOpen(false); exportExcelMese(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 text-sm flex items-center gap-2 transition">
+                      <CalendarIcon size={16} className="text-emerald-600" />
+                      <div className="font-medium">Mese corrente</div>
+                    </button>
+                    <button onClick={() => { setExportMenuOpen(false); exportExcelTutto(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 text-sm flex items-center gap-2 transition border-b border-slate-100">
+                      <FileSpreadsheet size={16} className="text-emerald-600" />
+                      <div className="font-medium">Tutto l'archivio</div>
+                    </button>
+                    <div className="px-3 py-2 text-xs uppercase tracking-wider text-slate-500 font-semibold bg-slate-50 border-b border-t border-slate-200">
+                      Backup tecnico
+                    </div>
+                    <button onClick={() => { setExportMenuOpen(false); exportJSON(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-slate-50 text-sm flex items-center gap-2 transition">
+                      <FileText size={16} className="text-slate-500" />
+                      <div>
+                        <div className="font-medium">Backup JSON</div>
+                        <div className="text-xs text-slate-500">Per ripristino completo</div>
+                      </div>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto px-6 flex items-center gap-1">
+          {[
+            { v: 'inserimento', l: 'Quadratura giornaliera', icon: FileText },
+            { v: 'archivio', l: 'Archivio', icon: Archive },
+            { v: 'statistiche', l: 'Statistiche', icon: BarChart3 }
+          ].map(t => (
+            <button key={t.v} onClick={() => setTab(t.v)}
+              className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-medium transition border-b-2 ${
+                tab === t.v ? 'border-white text-white' : 'border-transparent text-white/60 hover:text-white'
+              }`}>
+              <t.icon size={16} /> {t.l}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-6 py-6">
+        {showExportReminder && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <AlertTriangle size={18} className="text-amber-600 flex-shrink-0" />
+              <div className="text-sm">
+                <span className="font-semibold text-amber-900">Promemoria:</span>
+                <span className="text-amber-800 ml-1">
+                  hai inserito la quadratura di oggi ma non l'hai ancora esportata per la cartella condivisa.
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => exportExcelOggi()}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-semibold transition">
+                <FileSpreadsheet size={14} /> Esporta ora
+              </button>
+              <button onClick={() => setLastExportDate(today())}
+                className="text-amber-700 hover:text-amber-900 text-xs underline">
+                Ignora
+              </button>
+            </div>
+          </div>
+        )}
+        {tab === 'inserimento' && (
+          <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-6">
+            <QuadraturaForm initialDate={selectedDate} onSaved={handleSaved} key={selectedDate} />
+            <aside>
+              <Calendario items={items} onSelect={setSelectedDate} selectedDate={selectedDate} />
+              <div className="mt-4 bg-white border border-slate-200 rounded-lg p-4">
+                <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-3">Ultime quadrature</div>
+                <div className="space-y-2">
+                  {items.slice(0, 5).map(it => {
+                    const c = calc(it);
+                    const ok = Math.abs(c.quadraturaContante) < 0.02 && Math.abs(c.quadraturaIncassi) < 0.02;
+                    return (
+                      <button key={it.date} onClick={() => setSelectedDate(it.date)}
+                        className="w-full text-left flex items-center justify-between p-2 hover:bg-slate-50 rounded transition">
+                        <span className="text-sm font-mono">{fmtDateIT(it.date)}</span>
+                        <span className={`text-xs font-semibold ${ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {ok ? '✓' : '✗'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {items.length === 0 && (
+                    <div className="text-xs text-slate-400 text-center py-4">Nessuna quadratura ancora</div>
+                  )}
+                </div>
+              </div>
+            </aside>
+          </div>
+        )}
+        {tab === 'archivio' && (
+          <Archivio items={items} onSelect={(d) => { setSelectedDate(d); setTab('inserimento'); }} />
+        )}
+        {tab === 'statistiche' && (
+          <Statistiche items={items} />
+        )}
+      </main>
+
+      <footer className="max-w-7xl mx-auto px-6 py-6 text-xs text-slate-400 text-center">
+        FIDAMAR · Quadratura cassa · v1 · Dati locali al browser, nessun cloud
+        <div className="mt-1 text-slate-300">Esporta ogni giorno l'Excel nella cartella condivisa per l'ufficio</div>
+      </footer>
+    </div>
+  );
+}
+
+// Mount
+const rootEl = document.getElementById('root');
+const root = ReactDOM.createRoot(rootEl);
+root.render(<App />);
+// Nascondi loader dopo il primo render
+requestAnimationFrame(() => {
+  document.getElementById('loader')?.classList.add('hidden');
+});
+</script>
+<script>
+// Fallback se Babel fallisce
+window.addEventListener('error', (e) => {
+  const loader = document.getElementById('loader');
+  if (loader && !loader.classList.contains('hidden')) {
+    loader.innerHTML = '<div style="color:#dc2626;font-size:14px;max-width:400px;text-align:center;padding:20px">Errore caricamento. Ricarica la pagina o controlla la connessione.<br><br><code style="font-size:12px;color:#64748b">' + (e.message || '') + '</code></div>';
+  }
+});
+</script>
+</body>
+</html>
