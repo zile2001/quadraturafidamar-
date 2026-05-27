@@ -112,14 +112,33 @@ const fmtDateIT = (iso) => {
   const [y, m, d] = iso.split('-');
   return `${d}/${m}/${y}`;
 };
-const today = () => new Date().toISOString().split('T')[0];
+// FIX: usa data locale (non UTC) per evitare slittamenti di giorno con il fuso orario
+const toLocalISO = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+const today = () => toLocalISO(new Date());
 const monthName = (m) => ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'][m];
 
 const emptyQuadratura = () => ({
   operatori: '',
   apertura: { cassaforte: '', glory: '' },
-  incassi: { contanti: '', pos: '', satispay: '', ticket: '', pagopa: '' },
+  // Modalità di pagamento (con cosa hanno pagato i clienti)
+  incassi: {
+    contanti: '',
+    pos: '',
+    satispay: '',
+    ticket: '',
+    buoniResiRiscossi: '',  // buoni dati al cliente per resi, ora riscossi
+    buoniResoEmessi: '',    // buoni emessi al cliente per reso (pagamento futuro)
+    buoniIndustriali: '',   // buoni emessi da industria/produttore
+    arrotondamenti: ''      // rettifica netta glory ±1c/2c (può essere negativa)
+  },
+  // Corrispettivi (cosa ha venduto il negozio)
   corrispettivi: '',
+  pagopa: '',  // pagamenti per bollette/ATER (passanti)
   movimenti: {
     consegnaMonete: '',
     speseCash: '',
@@ -148,14 +167,24 @@ const calc = (q) => {
   const apGlory = num(a.glory);
   const totApertura = apCassaforte + apGlory;
 
+  // Modalità di pagamento
   const inContanti = num(i.contanti);
   const inPos = num(i.pos);
   const inSatispay = num(i.satispay);
   const inTicket = num(i.ticket);
-  const inPagopa = num(i.pagopa);
-  const totIncassi = inContanti + inPos + inSatispay + inTicket + inPagopa;
+  const inBuoniResiRiscossi = num(i.buoniResiRiscossi);
+  const inBuoniResoEmessi = num(i.buoniResoEmessi);
+  const inBuoniIndustriali = num(i.buoniIndustriali);
+  const inArrotondamenti = num(i.arrotondamenti); // può essere negativo
+  const totIncassi = inContanti + inPos + inSatispay + inTicket
+    + inBuoniResiRiscossi + inBuoniResoEmessi + inBuoniIndustriali;
+  // Nota: arrotondamenti NON entrano in totIncassi (vanno solo nel contante)
+
+  // Corrispettivi
   const corrispettivi = num(q.corrispettivi);
-  const quadraturaIncassi = corrispettivi - totIncassi;
+  const pagopa = num(q.pagopa);
+  const totCorrispettivi = corrispettivi + pagopa;
+  const quadraturaIncassi = totCorrispettivi - totIncassi;
 
   const consegnaMonete = num(m.consegnaMonete);
   const speseCash = num(m.speseCash);
@@ -174,8 +203,10 @@ const calc = (q) => {
     - rimborsiCash
     - rifornimentoGlory;
 
+  // Glory teorica: include arrotondamenti (rettifica del contante in glory)
   const teoricoGlory = apGlory
     + inContanti
+    + inArrotondamenti
     + rifornimentoGlory
     - ritiroValori
     - svuotamentoGlory;
@@ -192,8 +223,9 @@ const calc = (q) => {
 
   return {
     apCassaforte, apGlory, totApertura,
-    inContanti, inPos, inSatispay, inTicket, inPagopa,
-    totIncassi, corrispettivi, quadraturaIncassi,
+    inContanti, inPos, inSatispay, inTicket,
+    inBuoniResiRiscossi, inBuoniResoEmessi, inBuoniIndustriali, inArrotondamenti,
+    totIncassi, corrispettivi, pagopa, totCorrispettivi, quadraturaIncassi,
     teoricoCassaforte, teoricoGlory, teoricoTot,
     fisCassaforte, fisGlory, fisicoTot,
     diffCassaforte, diffGlory, quadraturaContante
@@ -342,9 +374,11 @@ const QuadraturaForm = ({ initialDate, onSaved }) => {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <button onClick={() => {
-              const d = new Date(date);
-              d.setDate(d.getDate() - 1);
-              setDate(d.toISOString().split('T')[0]);
+              // Parso la data ISO come locale (non UTC)
+              const [y, m, d] = date.split('-').map(Number);
+              const dt = new Date(y, m - 1, d);
+              dt.setDate(dt.getDate() - 1);
+              setDate(toLocalISO(dt));
             }} className="p-1.5 hover:bg-white/10 rounded transition">
               <ChevronLeft size={18} />
             </button>
@@ -355,9 +389,10 @@ const QuadraturaForm = ({ initialDate, onSaved }) => {
               className="bg-transparent border border-white/20 rounded px-3 py-1.5 text-sm focus:bg-white/10 focus:outline-none"
             />
             <button onClick={() => {
-              const d = new Date(date);
-              d.setDate(d.getDate() + 1);
-              setDate(d.toISOString().split('T')[0]);
+              const [y, m, d] = date.split('-').map(Number);
+              const dt = new Date(y, m - 1, d);
+              dt.setDate(dt.getDate() + 1);
+              setDate(toLocalISO(dt));
             }} className="p-1.5 hover:bg-white/10 rounded transition">
               <ChevronRight size={18} />
             </button>
@@ -401,7 +436,7 @@ const QuadraturaForm = ({ initialDate, onSaved }) => {
       <Section title="Incassi per forma di pagamento" icon={Receipt}
         color="bg-emerald-50 text-emerald-800 border-emerald-200"
         totale={c.totIncassi} totaleLabel="Totale incassato">
-        <Field label="Contanti" hint="Incassi in contante (entrano in glory)" icon={Banknote}
+        <Field label="Contanti" hint="Incassi in contante (entrano in glory, include PagoPA)" icon={Banknote}
           value={q.incassi.contanti} onChange={v => update('incassi.contanti', v)} />
         <Field label="POS / Carte" hint="Bancomat, credito, prepagate" icon={CreditCard}
           value={q.incassi.pos} onChange={v => update('incassi.pos', v)} />
@@ -409,20 +444,32 @@ const QuadraturaForm = ({ initialDate, onSaved }) => {
           value={q.incassi.satispay} onChange={v => update('incassi.satispay', v)} />
         <Field label="Ticket pasto" hint="Cartacei + digitali, importo totale" icon={Ticket}
           value={q.incassi.ticket} onChange={v => update('incassi.ticket', v)} />
-        <Field label="PagoPA" hint="Bollette, affitti ATER, tributi" icon={FileText}
-          value={q.incassi.pagopa} onChange={v => update('incassi.pagopa', v)} />
+        <Field label="Buoni resi riscossi" hint="Buoni dati al cliente per resi, ora usati come pagamento" icon={Ticket}
+          value={q.incassi.buoniResiRiscossi} onChange={v => update('incassi.buoniResiRiscossi', v)} />
+        <Field label="Buoni reso emessi" hint="Buoni emessi al cliente come rimborso reso" icon={Ticket}
+          value={q.incassi.buoniResoEmessi} onChange={v => update('incassi.buoniResoEmessi', v)} />
+        <Field label="Buoni industriali" hint="Buoni sconto emessi dall'industria/produttore" icon={Ticket}
+          value={q.incassi.buoniIndustriali} onChange={v => update('incassi.buoniIndustriali', v)} />
+        <Field label="Arrotondamenti" hint="Rettifica glory (1c/2c) — può essere negativa" icon={ArrowRightLeft}
+          value={q.incassi.arrotondamenti} onChange={v => update('incassi.arrotondamenti', v)} />
       </Section>
 
       <Section title="Corrispettivi (verifica incassi)" icon={Receipt}
-        color="bg-indigo-50 text-indigo-800 border-indigo-200">
+        color="bg-indigo-50 text-indigo-800 border-indigo-200"
+        totale={c.totCorrispettivi} totaleLabel="Totale corrispettivi">
         <Field label="Corrispettivi totali da scontrini fiscali"
-          hint="Devono coincidere con la somma incassi"
+          hint="Già netto dei resi emessi"
           color="indigo"
           value={q.corrispettivi} onChange={v => update('corrispettivi', v)} />
+        <Field label="PagoPA"
+          hint="Bollette, affitti ATER, tributi (passanti, contanti già in glory)"
+          color="indigo"
+          icon={FileText}
+          value={q.pagopa} onChange={v => update('pagopa', v)} />
         <div className="py-3 flex items-center justify-between border-t border-slate-100 mt-1">
           <div className="text-sm font-semibold text-slate-700">
             Quadratura incassi
-            <span className="text-xs font-normal text-slate-500 ml-2">(corrispettivi − incassi)</span>
+            <span className="text-xs font-normal text-slate-500 ml-2">(corrispettivi + PagoPA − incassi)</span>
           </div>
           <StatusBadge value={c.quadraturaIncassi} label="Quadrata" />
         </div>
@@ -494,7 +541,11 @@ const QuadraturaForm = ({ initialDate, onSaved }) => {
               <span className="font-semibold">{fmtEurZero(c.teoricoCassaforte)}</span>
             </div>
             <div className="flex justify-between py-1 border-b border-white/10">
-              <span className="text-white/70">Teorico glory</span>
+              <span className="text-white/70">Teorico glory
+                {Math.abs(c.inArrotondamenti) >= 0.005 && (
+                  <span className="text-amber-300/80 text-xs ml-1">(arr. {c.inArrotondamenti >= 0 ? '+' : ''}{fmtEur(c.inArrotondamenti)})</span>
+                )}
+              </span>
               <span className="font-semibold">{fmtEurZero(c.teoricoGlory)}</span>
             </div>
             <div className="flex justify-between py-1.5 border-b border-white/10 text-base">
@@ -762,7 +813,7 @@ const Statistiche = ({ items }) => {
     const days = parseInt(periodo);
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
+    const cutoffStr = toLocalISO(cutoff);
     return items.filter(it => it.date >= cutoffStr).sort((a, b) => a.date.localeCompare(b.date));
   }, [items, periodo]);
 
@@ -771,14 +822,22 @@ const Statistiche = ({ items }) => {
     return {
       date: it.date.slice(5).replace('-', '/'),
       quadraturaContante: Math.abs(c.quadraturaContante) < 0.02 ? 0 : c.quadraturaContante,
-      contanti: c.inContanti, pos: c.inPos, satispay: c.inSatispay, ticket: c.inTicket, pagopa: c.inPagopa
+      contanti: c.inContanti,
+      pos: c.inPos,
+      satispay: c.inSatispay,
+      ticket: c.inTicket,
+      buoniResiRiscossi: c.inBuoniResiRiscossi,
+      buoniResoEmessi: c.inBuoniResoEmessi,
+      buoniIndustriali: c.inBuoniIndustriali
     };
   }), [filteredItems]);
 
   const stats = useMemo(() => {
     let okGiorni = 0, koContante = 0, koIncassi = 0;
     let totAmmanco = 0, totEccedenza = 0;
-    let totContanti = 0, totPos = 0, totSatispay = 0, totTicket = 0, totPagopa = 0, totIncassiAll = 0;
+    let totContanti = 0, totPos = 0, totSatispay = 0, totTicket = 0;
+    let totBuoniResiRiscossi = 0, totBuoniResoEmessi = 0, totBuoniIndustriali = 0;
+    let totPagopa = 0, totIncassiAll = 0;
     filteredItems.forEach(it => {
       const c = calc(it);
       const okContante = Math.abs(c.quadraturaContante) < 0.02;
@@ -791,10 +850,17 @@ const Statistiche = ({ items }) => {
       }
       if (!okIncassi) koIncassi++;
       totContanti += c.inContanti; totPos += c.inPos; totSatispay += c.inSatispay;
-      totTicket += c.inTicket; totPagopa += c.inPagopa; totIncassiAll += c.totIncassi;
+      totTicket += c.inTicket;
+      totBuoniResiRiscossi += c.inBuoniResiRiscossi;
+      totBuoniResoEmessi += c.inBuoniResoEmessi;
+      totBuoniIndustriali += c.inBuoniIndustriali;
+      totPagopa += c.pagopa;
+      totIncassiAll += c.totIncassi;
     });
     return { tot: filteredItems.length, okGiorni, koContante, koIncassi,
-      totAmmanco, totEccedenza, totContanti, totPos, totSatispay, totTicket, totPagopa, totIncassiAll };
+      totAmmanco, totEccedenza, totContanti, totPos, totSatispay, totTicket,
+      totBuoniResiRiscossi, totBuoniResoEmessi, totBuoniIndustriali,
+      totPagopa, totIncassiAll };
   }, [filteredItems]);
 
   const mixData = useMemo(() => [
@@ -802,7 +868,9 @@ const Statistiche = ({ items }) => {
     { name: 'POS', value: stats.totPos, color: '#3b82f6' },
     { name: 'Satispay', value: stats.totSatispay, color: '#f97316' },
     { name: 'Ticket', value: stats.totTicket, color: '#10b981' },
-    { name: 'PagoPA', value: stats.totPagopa, color: '#8b5cf6' }
+    { name: 'B. resi risc.', value: stats.totBuoniResiRiscossi, color: '#8b5cf6' },
+    { name: 'B. reso em.', value: stats.totBuoniResoEmessi, color: '#ec4899' },
+    { name: 'B. industriali', value: stats.totBuoniIndustriali, color: '#14b8a6' }
   ].filter(d => d.value > 0), [stats]);
 
   return (
@@ -899,7 +967,9 @@ const Statistiche = ({ items }) => {
               <Bar dataKey="pos" stackId="a" fill="#3b82f6" name="POS" />
               <Bar dataKey="satispay" stackId="a" fill="#f97316" name="Satispay" />
               <Bar dataKey="ticket" stackId="a" fill="#10b981" name="Ticket" />
-              <Bar dataKey="pagopa" stackId="a" fill="#8b5cf6" name="PagoPA" />
+              <Bar dataKey="buoniResiRiscossi" stackId="a" fill="#8b5cf6" name="B. resi riscossi" />
+              <Bar dataKey="buoniResoEmessi" stackId="a" fill="#ec4899" name="B. reso emessi" />
+              <Bar dataKey="buoniIndustriali" stackId="a" fill="#14b8a6" name="B. industriali" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -958,17 +1028,26 @@ function App() {
     const c = calc(it);
     const okIncassi = Math.abs(c.quadraturaIncassi) < 0.02;
     const okContante = Math.abs(c.quadraturaContante) < 0.02;
+    // Data come oggetto Date così Excel la riconosce come data ordinabile
+    const [yy, mm, dd] = (it.date || '').split('-').map(Number);
+    const dataDate = (yy && mm && dd) ? new Date(yy, mm - 1, dd) : null;
     return {
-      'Data': fmtDateIT(it.date),
+      'Data': dataDate || it.date || '',
       'Operatori': it.operatori || '',
-      // Incassi
+      // Modalità di pagamento
       'Contanti': num(it.incassi?.contanti),
       'POS': num(it.incassi?.pos),
       'Satispay': num(it.incassi?.satispay),
       'Ticket': num(it.incassi?.ticket),
-      'PagoPA': num(it.incassi?.pagopa),
+      'Buoni resi riscossi': num(it.incassi?.buoniResiRiscossi),
+      'Buoni reso emessi': num(it.incassi?.buoniResoEmessi),
+      'Buoni industriali': num(it.incassi?.buoniIndustriali),
+      'Arrotondamenti': num(it.incassi?.arrotondamenti),
       'Totale incassi': c.totIncassi,
+      // Corrispettivi
       'Corrispettivi scontrini': c.corrispettivi,
+      'PagoPA': c.pagopa,
+      'Totale corrispettivi': c.totCorrispettivi,
       'Quadr. incassi': c.quadraturaIncassi,
       'Esito incassi': okIncassi ? 'OK' : 'KO',
       // Apertura
@@ -991,7 +1070,6 @@ function App() {
       'Diff. glory': c.diffGlory,
       'Quadr. contante': c.quadraturaContante,
       'Esito contante': okContante ? 'OK' : 'KO',
-      // Stato globale
       'Stato giornata': (okIncassi && okContante) ? 'OK' : 'KO',
       'Note': it.note || ''
     };
@@ -999,22 +1077,25 @@ function App() {
 
   const buildWorkbook = (records, sheetName = 'Quadrature') => {
     const rows = records.map(flattenForExcel);
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = XLSX.utils.json_to_sheet(rows, { cellDates: true });
     // Larghezza colonne automatica (ragionevole)
     const colWidths = Object.keys(rows[0] || {}).map(k => ({
       wch: Math.max(k.length, 14)
     }));
     ws['!cols'] = colWidths;
-    // Formato numerico Euro per le colonne numeriche
+    // Formato celle: date e numeri Euro
     const range = XLSX.utils.decode_range(ws['!ref']);
     const headerRow = rows[0] ? Object.keys(rows[0]) : [];
+    const textCols = ['Data', 'Operatori', 'Esito incassi', 'Esito contante', 'Stato giornata', 'Note'];
     for (let R = 1; R <= range.e.r; ++R) {
       for (let C = 0; C <= range.e.c; ++C) {
         const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
         if (!cell) continue;
         const header = headerRow[C] || '';
-        const isMoney = !['Data', 'Operatori', 'Esito incassi', 'Esito contante', 'Stato giornata', 'Note'].includes(header);
-        if (isMoney && typeof cell.v === 'number') {
+        if (header === 'Data' && cell.v instanceof Date) {
+          cell.t = 'd';
+          cell.z = 'dd/mm/yyyy';
+        } else if (!textCols.includes(header) && typeof cell.v === 'number') {
           cell.t = 'n';
           cell.z = '#,##0.00 "€"';
         }
@@ -1055,8 +1136,8 @@ function App() {
     monday.setDate(d.getDate() - day + 1);
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
-    const from = monday.toISOString().split('T')[0];
-    const to = sunday.toISOString().split('T')[0];
+    const from = toLocalISO(monday);
+    const to = toLocalISO(sunday);
     await exportExcelPeriodo(from, to, `settimana_${from}`);
   };
 
