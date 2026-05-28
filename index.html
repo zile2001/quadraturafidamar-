@@ -1401,7 +1401,7 @@ function App() {
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(13);
-    doc.text('QUADRATURA CASSA — FIDAMAR', pageW / 2, y + 19, { align: 'center' });
+    doc.text('QUADRATURA CASSA - FIDAMAR', pageW / 2, y + 19, { align: 'center' });
     y += 38;
 
     // Data + operatori
@@ -1409,7 +1409,7 @@ function App() {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
     doc.text(`Data: ${fmtDateIT(it.date)}`, margin, y);
-    doc.text(`Operatori: ${it.operatori || '—'}`, pageW - margin, y, { align: 'right' });
+    doc.text(`Operatori: ${it.operatori || '-'}`, pageW - margin, y, { align: 'right' });
     y += 16;
 
     // Helper: sezione (titolo blu a tutta larghezza)
@@ -1504,8 +1504,8 @@ function App() {
 
     // 5. TRASFERIMENTI INTERNI
     section('TRASFERIMENTI INTERNI');
-    item('Rifornimento glory (cassaforte → glory)', v(it.interni?.rifornimentoGlory), { labelGrey: true });
-    item('Svuotamento glory (glory → cassaforte)', v(it.interni?.svuotamentoGlory), { labelGrey: true });
+    item('Rifornimento glory (cassaforte -> glory)', v(it.interni?.rifornimentoGlory), { labelGrey: true });
+    item('Svuotamento glory (glory -> cassaforte)', v(it.interni?.svuotamentoGlory), { labelGrey: true });
     spacer();
 
     // 6. FISICO CHIUSURA
@@ -1555,7 +1555,7 @@ function App() {
       const ok = Math.abs(c.quadraturaContante) < 0.02 && Math.abs(c.quadraturaIncassi) < 0.02;
       return [
         fmtDateIT(it.date),
-        it.operatori || '—',
+        it.operatori || '-',
         eur(c.totIncassi),
         eur(c.totCorrispettivi),
         eur(c.quadraturaIncassi),
