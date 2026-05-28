@@ -132,13 +132,13 @@ const emptyQuadratura = () => ({
     satispay: '',
     ticket: '',
     buoniResiRiscossi: '',  // buoni dati al cliente per resi, ora riscossi
-    buoniResoEmessi: '',    // buoni emessi al cliente per reso (pagamento futuro)
     buoniIndustriali: '',   // buoni emessi da industria/produttore
     arrotondamenti: ''      // rettifica netta glory ±1c/2c (può essere negativa)
   },
   // Corrispettivi (cosa ha venduto il negozio)
   corrispettivi: '',
-  pagopa: '',  // pagamenti per bollette/ATER (passanti)
+  pagopa: '',     // pagamenti per bollette/ATER (passanti)
+  resiEmessi: '', // resi emessi al cliente (sommati al corrispettivo per la quadratura)
   movimenti: {
     consegnaMonete: '',
     speseCash: '',
@@ -173,17 +173,17 @@ const calc = (q) => {
   const inSatispay = num(i.satispay);
   const inTicket = num(i.ticket);
   const inBuoniResiRiscossi = num(i.buoniResiRiscossi);
-  const inBuoniResoEmessi = num(i.buoniResoEmessi);
   const inBuoniIndustriali = num(i.buoniIndustriali);
   const inArrotondamenti = num(i.arrotondamenti); // può essere negativo
   const totIncassi = inContanti + inPos + inSatispay + inTicket
-    + inBuoniResiRiscossi + inBuoniResoEmessi + inBuoniIndustriali;
+    + inBuoniResiRiscossi + inBuoniIndustriali;
   // Nota: arrotondamenti NON entrano in totIncassi (vanno solo nel contante)
 
   // Corrispettivi
   const corrispettivi = num(q.corrispettivi);
   const pagopa = num(q.pagopa);
-  const totCorrispettivi = corrispettivi + pagopa;
+  const resiEmessi = num(q.resiEmessi);
+  const totCorrispettivi = corrispettivi + pagopa + resiEmessi;
   const quadraturaIncassi = totCorrispettivi - totIncassi;
 
   const consegnaMonete = num(m.consegnaMonete);
@@ -224,8 +224,8 @@ const calc = (q) => {
   return {
     apCassaforte, apGlory, totApertura,
     inContanti, inPos, inSatispay, inTicket,
-    inBuoniResiRiscossi, inBuoniResoEmessi, inBuoniIndustriali, inArrotondamenti,
-    totIncassi, corrispettivi, pagopa, totCorrispettivi, quadraturaIncassi,
+    inBuoniResiRiscossi, inBuoniIndustriali, inArrotondamenti,
+    totIncassi, corrispettivi, pagopa, resiEmessi, totCorrispettivi, quadraturaIncassi,
     teoricoCassaforte, teoricoGlory, teoricoTot,
     fisCassaforte, fisGlory, fisicoTot,
     diffCassaforte, diffGlory, quadraturaContante
@@ -446,8 +446,6 @@ const QuadraturaForm = ({ initialDate, onSaved }) => {
           value={q.incassi.ticket} onChange={v => update('incassi.ticket', v)} />
         <Field label="Buoni resi riscossi" hint="Buoni dati al cliente per resi, ora usati come pagamento" icon={Ticket}
           value={q.incassi.buoniResiRiscossi} onChange={v => update('incassi.buoniResiRiscossi', v)} />
-        <Field label="Buoni reso emessi" hint="Buoni emessi al cliente come rimborso reso" icon={Ticket}
-          value={q.incassi.buoniResoEmessi} onChange={v => update('incassi.buoniResoEmessi', v)} />
         <Field label="Buoni industriali" hint="Buoni sconto emessi dall'industria/produttore" icon={Ticket}
           value={q.incassi.buoniIndustriali} onChange={v => update('incassi.buoniIndustriali', v)} />
         <Field label="Arrotondamenti" hint="Rettifica glory (1c/2c) — può essere negativa" icon={ArrowRightLeft}
@@ -458,7 +456,7 @@ const QuadraturaForm = ({ initialDate, onSaved }) => {
         color="bg-indigo-50 text-indigo-800 border-indigo-200"
         totale={c.totCorrispettivi} totaleLabel="Totale corrispettivi">
         <Field label="Corrispettivi totali da scontrini fiscali"
-          hint="Già netto dei resi emessi"
+          hint="Totale dello scontrino fiscale del giorno"
           color="indigo"
           value={q.corrispettivi} onChange={v => update('corrispettivi', v)} />
         <Field label="PagoPA"
@@ -466,10 +464,15 @@ const QuadraturaForm = ({ initialDate, onSaved }) => {
           color="indigo"
           icon={FileText}
           value={q.pagopa} onChange={v => update('pagopa', v)} />
+        <Field label="Resi emessi"
+          hint="Resi emessi al cliente (sommati al corrispettivo)"
+          color="indigo"
+          icon={Ticket}
+          value={q.resiEmessi} onChange={v => update('resiEmessi', v)} />
         <div className="py-3 flex items-center justify-between border-t border-slate-100 mt-1">
           <div className="text-sm font-semibold text-slate-700">
             Quadratura incassi
-            <span className="text-xs font-normal text-slate-500 ml-2">(corrispettivi + PagoPA − incassi)</span>
+            <span className="text-xs font-normal text-slate-500 ml-2">(corrispettivi + PagoPA + resi emessi − incassi)</span>
           </div>
           <StatusBadge value={c.quadraturaIncassi} label="Quadrata" />
         </div>
@@ -827,7 +830,6 @@ const Statistiche = ({ items }) => {
       satispay: c.inSatispay,
       ticket: c.inTicket,
       buoniResiRiscossi: c.inBuoniResiRiscossi,
-      buoniResoEmessi: c.inBuoniResoEmessi,
       buoniIndustriali: c.inBuoniIndustriali
     };
   }), [filteredItems]);
@@ -836,7 +838,7 @@ const Statistiche = ({ items }) => {
     let okGiorni = 0, koContante = 0, koIncassi = 0;
     let totAmmanco = 0, totEccedenza = 0;
     let totContanti = 0, totPos = 0, totSatispay = 0, totTicket = 0;
-    let totBuoniResiRiscossi = 0, totBuoniResoEmessi = 0, totBuoniIndustriali = 0;
+    let totBuoniResiRiscossi = 0, totBuoniIndustriali = 0;
     let totPagopa = 0, totIncassiAll = 0;
     filteredItems.forEach(it => {
       const c = calc(it);
@@ -852,14 +854,13 @@ const Statistiche = ({ items }) => {
       totContanti += c.inContanti; totPos += c.inPos; totSatispay += c.inSatispay;
       totTicket += c.inTicket;
       totBuoniResiRiscossi += c.inBuoniResiRiscossi;
-      totBuoniResoEmessi += c.inBuoniResoEmessi;
       totBuoniIndustriali += c.inBuoniIndustriali;
       totPagopa += c.pagopa;
       totIncassiAll += c.totIncassi;
     });
     return { tot: filteredItems.length, okGiorni, koContante, koIncassi,
       totAmmanco, totEccedenza, totContanti, totPos, totSatispay, totTicket,
-      totBuoniResiRiscossi, totBuoniResoEmessi, totBuoniIndustriali,
+      totBuoniResiRiscossi, totBuoniIndustriali,
       totPagopa, totIncassiAll };
   }, [filteredItems]);
 
@@ -869,7 +870,6 @@ const Statistiche = ({ items }) => {
     { name: 'Satispay', value: stats.totSatispay, color: '#f97316' },
     { name: 'Ticket', value: stats.totTicket, color: '#10b981' },
     { name: 'B. resi risc.', value: stats.totBuoniResiRiscossi, color: '#8b5cf6' },
-    { name: 'B. reso em.', value: stats.totBuoniResoEmessi, color: '#ec4899' },
     { name: 'B. industriali', value: stats.totBuoniIndustriali, color: '#14b8a6' }
   ].filter(d => d.value > 0), [stats]);
 
@@ -968,7 +968,6 @@ const Statistiche = ({ items }) => {
               <Bar dataKey="satispay" stackId="a" fill="#f97316" name="Satispay" />
               <Bar dataKey="ticket" stackId="a" fill="#10b981" name="Ticket" />
               <Bar dataKey="buoniResiRiscossi" stackId="a" fill="#8b5cf6" name="B. resi riscossi" />
-              <Bar dataKey="buoniResoEmessi" stackId="a" fill="#ec4899" name="B. reso emessi" />
               <Bar dataKey="buoniIndustriali" stackId="a" fill="#14b8a6" name="B. industriali" />
             </BarChart>
           </ResponsiveContainer>
@@ -1040,13 +1039,13 @@ function App() {
       'Satispay': num(it.incassi?.satispay),
       'Ticket': num(it.incassi?.ticket),
       'Buoni resi riscossi': num(it.incassi?.buoniResiRiscossi),
-      'Buoni reso emessi': num(it.incassi?.buoniResoEmessi),
       'Buoni industriali': num(it.incassi?.buoniIndustriali),
       'Arrotondamenti': num(it.incassi?.arrotondamenti),
       'Totale incassi': c.totIncassi,
       // Corrispettivi
       'Corrispettivi scontrini': c.corrispettivi,
       'PagoPA': c.pagopa,
+      'Resi emessi': c.resiEmessi,
       'Totale corrispettivi': c.totCorrispettivi,
       'Quadr. incassi': c.quadraturaIncassi,
       'Esito incassi': okIncassi ? 'OK' : 'KO',
