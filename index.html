@@ -176,8 +176,8 @@ const calc = (q) => {
   const inBuoniIndustriali = num(i.buoniIndustriali);
   const inArrotondamenti = num(i.arrotondamenti); // può essere negativo
   const totIncassi = inContanti + inPos + inSatispay + inTicket
-    + inBuoniResiRiscossi + inBuoniIndustriali;
-  // Nota: arrotondamenti NON entrano in totIncassi (vanno solo nel contante)
+    + inBuoniResiRiscossi + inBuoniIndustriali + inArrotondamenti;
+  // Arrotondamenti: sommati col proprio segno (negativo sottrae, positivo aggiunge)
 
   // Corrispettivi
   const corrispettivi = num(q.corrispettivi);
