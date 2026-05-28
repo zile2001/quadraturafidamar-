@@ -16,7 +16,9 @@
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
     "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1",
     "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
-    "xlsx": "https://esm.sh/xlsx-js-style@1.2.0?bundle"
+    "xlsx": "https://esm.sh/xlsx-js-style@1.2.0?bundle",
+    "jspdf": "https://esm.sh/jspdf@2.5.1",
+    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2?deps=jspdf@2.5.1"
   }
 }
 </script>
@@ -38,6 +40,8 @@ import * as XLSXns from 'xlsx';
 // xlsx-js-style su esm.sh può esportare la libreria sotto .default:
 // normalizzo così XLSX.utils esiste sempre.
 const XLSX = (XLSXns && XLSXns.utils) ? XLSXns : (XLSXns.default || XLSXns);
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, PieChart, Pie, Cell } from 'recharts';
 import {
   Archive, BarChart3, Save, Trash2, Download, Upload, ChevronLeft, ChevronRight,
@@ -1361,6 +1365,300 @@ function App() {
     downloadWorkbook(wb, `archivio_completo_${today()}.xlsx`);
   };
 
+  // ===================== EXPORT PDF =====================
+  // Colori (RGB) coerenti con la webdesk
+  const PDF_COLORS = {
+    navy: [15, 23, 42],        // slate-900
+    section: [31, 56, 100],    // blu sezione
+    headerBg: [217, 226, 243], // azzurro chiaro
+    okText: [0, 97, 0], okBg: [198, 239, 206],
+    koText: [156, 0, 6], koBg: [255, 199, 206],
+    totalBg: [217, 226, 243],
+    grey: [100, 116, 139],
+    line: [226, 232, 240]
+  };
+
+  const eur = (n) => {
+    if (n === null || n === undefined || isNaN(n)) return '0,00 €';
+    return new Intl.NumberFormat('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n) + ' €';
+  };
+
+  // Disegna una pagina-giorno verticale nel doc PDF (a partire da y iniziale)
+  const renderDayPage = (doc, it) => {
+    const c = calc(it);
+    const okIncassi = Math.abs(c.quadraturaIncassi) < 0.02;
+    const okContante = Math.abs(c.quadraturaContante) < 0.02;
+    const v = (x) => num(x);
+
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 40;
+    const contentW = pageW - margin * 2;
+    let y = margin;
+
+    // Intestazione
+    doc.setFillColor(...PDF_COLORS.navy);
+    doc.rect(margin, y, contentW, 30, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('QUADRATURA CASSA — FIDAMAR', pageW / 2, y + 19, { align: 'center' });
+    y += 38;
+
+    // Data + operatori
+    doc.setTextColor(51, 65, 85);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text(`Data: ${fmtDateIT(it.date)}`, margin, y);
+    doc.text(`Operatori: ${it.operatori || '—'}`, pageW - margin, y, { align: 'right' });
+    y += 16;
+
+    // Helper: sezione (titolo blu a tutta larghezza)
+    const section = (title) => {
+      doc.setFillColor(...PDF_COLORS.section);
+      doc.rect(margin, y, contentW, 18, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.text(title, margin + 6, y + 12.5);
+      y += 18;
+    };
+
+    // Helper: riga voce (label sx, valore dx)
+    const item = (label, value, opts = {}) => {
+      const h = 15;
+      doc.setDrawColor(...PDF_COLORS.line);
+      doc.setLineWidth(0.5);
+      doc.line(margin, y + h, margin + contentW, y + h);
+      doc.setFont('helvetica', opts.bold ? 'bold' : 'normal');
+      doc.setFontSize(9);
+      const txtColor = opts.esito === true ? PDF_COLORS.okText
+        : opts.esito === false ? PDF_COLORS.koText : [51, 65, 85];
+      doc.setTextColor(...(opts.labelGrey ? PDF_COLORS.grey : [51, 65, 85]));
+      doc.text(String(label), margin + 6, y + 10);
+      if (value !== null && value !== undefined) {
+        doc.setTextColor(...txtColor);
+        doc.setFont('helvetica', opts.bold || opts.esito !== undefined ? 'bold' : 'normal');
+        const valTxt = opts.raw ? String(value) : eur(value);
+        doc.text(valTxt, margin + contentW - 6, y + 10, { align: 'right' });
+      }
+      y += h;
+    };
+
+    // Helper: riga totale (sfondo azzurro o colore esito)
+    const total = (label, value, opts = {}) => {
+      const h = 17;
+      let bg = PDF_COLORS.totalBg, fg = PDF_COLORS.section;
+      if (opts.esito === true) { bg = PDF_COLORS.okBg; fg = PDF_COLORS.okText; }
+      if (opts.esito === false) { bg = PDF_COLORS.koBg; fg = PDF_COLORS.koText; }
+      doc.setFillColor(...bg);
+      doc.rect(margin, y, contentW, h, 'F');
+      doc.setTextColor(...fg);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.text(String(label), margin + 6, y + 11.5);
+      if (value !== null && value !== undefined) {
+        doc.text(eur(value), margin + contentW - 6, y + 11.5, { align: 'right' });
+      }
+      y += h;
+    };
+
+    const spacer = (px = 8) => { y += px; };
+
+    // 1. INCASSI
+    section('INCASSI PER FORMA DI PAGAMENTO');
+    item('Contanti', v(it.incassi?.contanti), { labelGrey: true });
+    item('POS / Carte', v(it.incassi?.pos), { labelGrey: true });
+    item('Satispay', v(it.incassi?.satispay), { labelGrey: true });
+    item('Ticket pasto', v(it.incassi?.ticket), { labelGrey: true });
+    item('Buoni resi riscossi', v(it.incassi?.buoniResiRiscossi), { labelGrey: true });
+    item('Buoni industriali', v(it.incassi?.buoniIndustriali), { labelGrey: true });
+    item('Arrotondamenti', v(it.incassi?.arrotondamenti), { labelGrey: true });
+    total('TOTALE INCASSI', c.totIncassi);
+    spacer();
+
+    // 2. CORRISPETTIVI
+    section('CORRISPETTIVI (VERIFICA INCASSI)');
+    item('Corrispettivi da scontrini', c.corrispettivi, { labelGrey: true });
+    item('PagoPA', c.pagopa, { labelGrey: true });
+    item('Resi emessi', c.resiEmessi, { labelGrey: true });
+    total('TOTALE CORRISPETTIVI', c.totCorrispettivi);
+    total('QUADRATURA INCASSI', c.quadraturaIncassi, { esito: okIncassi });
+    item('Esito incassi', okIncassi ? 'OK' : 'KO', { raw: true, esito: okIncassi, labelGrey: true });
+    spacer();
+
+    // 3. APERTURA
+    section('FONDO APERTURA');
+    item('Cassaforte', c.apCassaforte, { labelGrey: true });
+    item('Glory', c.apGlory, { labelGrey: true });
+    total('TOTALE APERTURA', c.totApertura);
+    spacer();
+
+    // 4. MOVIMENTI CONTANTE
+    section('MOVIMENTI CONTANTE');
+    item('Consegna monete (entrata cassaforte)', v(it.movimenti?.consegnaMonete), { labelGrey: true });
+    item('Spese cash (uscita cassaforte)', v(it.movimenti?.speseCash), { labelGrey: true });
+    item('Versamento banca (uscita cassaforte)', v(it.movimenti?.versamentoBanca), { labelGrey: true });
+    item('Rimborsi cash (uscita cassaforte)', v(it.movimenti?.rimborsiCash), { labelGrey: true });
+    item('Ritiro valori (uscita glory)', v(it.movimenti?.ritiroValori), { labelGrey: true });
+    spacer();
+
+    // 5. TRASFERIMENTI INTERNI
+    section('TRASFERIMENTI INTERNI');
+    item('Rifornimento glory (cassaforte → glory)', v(it.interni?.rifornimentoGlory), { labelGrey: true });
+    item('Svuotamento glory (glory → cassaforte)', v(it.interni?.svuotamentoGlory), { labelGrey: true });
+    spacer();
+
+    // 6. FISICO CHIUSURA
+    section('FONDO FISICO CHIUSURA');
+    item('Cassaforte conteggiata', c.fisCassaforte, { labelGrey: true });
+    item('Glory', c.fisGlory, { labelGrey: true });
+    total('TOTALE FISICO', c.fisicoTot);
+    spacer();
+
+    // 7. QUADRATURA CONTANTE
+    section('QUADRATURA CONTANTE');
+    item('Teorico cassaforte', c.teoricoCassaforte, { labelGrey: true });
+    item('Teorico glory', c.teoricoGlory, { labelGrey: true });
+    total('TOTALE TEORICO', c.teoricoTot);
+    total('TOTALE FISICO', c.fisicoTot);
+    item('Differenza cassaforte', c.diffCassaforte, { labelGrey: true });
+    item('Differenza glory', c.diffGlory, { labelGrey: true });
+    total('QUADRATURA CONTANTE', c.quadraturaContante, { esito: okContante });
+    item('Esito contante', okContante ? 'OK' : 'KO', { raw: true, esito: okContante, labelGrey: true });
+
+    // Note (se presenti)
+    if (it.note && it.note.trim()) {
+      spacer();
+      section('NOTE');
+      doc.setTextColor(51, 65, 85);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      const lines = doc.splitTextToSize(it.note, contentW - 12);
+      doc.text(lines, margin + 6, y + 11);
+    }
+  };
+
+  // Pagina riepilogo tabellare (orizzontale)
+  const renderSummaryPage = (doc, records) => {
+    doc.addPage('a4', 'landscape');
+    const pageW = doc.internal.pageSize.getWidth();
+    doc.setFillColor(...PDF_COLORS.navy);
+    doc.rect(40, 30, pageW - 80, 26, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text('RIEPILOGO QUADRATURE', pageW / 2, 47, { align: 'center' });
+
+    const head = [['Data', 'Operatori', 'Tot. incassi', 'Tot. corrisp.', 'Q. incassi', 'Teorico', 'Fisico', 'Q. contante', 'Stato']];
+    const body = records.map(it => {
+      const c = calc(it);
+      const ok = Math.abs(c.quadraturaContante) < 0.02 && Math.abs(c.quadraturaIncassi) < 0.02;
+      return [
+        fmtDateIT(it.date),
+        it.operatori || '—',
+        eur(c.totIncassi),
+        eur(c.totCorrispettivi),
+        eur(c.quadraturaIncassi),
+        eur(c.teoricoTot),
+        eur(c.fisicoTot),
+        eur(c.quadraturaContante),
+        ok ? 'OK' : 'KO'
+      ];
+    });
+
+    const tableOpts = {
+      head, body,
+      startY: 66,
+      margin: { left: 40, right: 40 },
+      styles: { fontSize: 8, cellPadding: 4, font: 'helvetica' },
+      headStyles: { fillColor: PDF_COLORS.section, textColor: [255, 255, 255], fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      columnStyles: {
+        2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' },
+        5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' },
+        8: { halign: 'center', fontStyle: 'bold' }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && data.column.index === 8) {
+          if (data.cell.raw === 'OK') {
+            data.cell.styles.textColor = PDF_COLORS.okText;
+            data.cell.styles.fillColor = PDF_COLORS.okBg;
+          } else {
+            data.cell.styles.textColor = PDF_COLORS.koText;
+            data.cell.styles.fillColor = PDF_COLORS.koBg;
+          }
+        }
+      }
+    };
+    // autoTable può essere funzione standalone o metodo del doc, a seconda del bundle
+    if (typeof autoTable === 'function') {
+      autoTable(doc, tableOpts);
+    } else if (typeof doc.autoTable === 'function') {
+      doc.autoTable(tableOpts);
+    }
+  };
+
+  const buildPDF = (records) => {
+    const sorted = [...records].sort((a, b) => a.date.localeCompare(b.date));
+    const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+    sorted.forEach((it, idx) => {
+      if (idx > 0) doc.addPage('a4', 'portrait');
+      renderDayPage(doc, it);
+    });
+    if (sorted.length > 1) {
+      renderSummaryPage(doc, sorted);
+    }
+    return doc;
+  };
+
+  const downloadPDF = (doc, filename) => {
+    doc.save(filename);
+    setLastExportDate(today());
+  };
+
+  const exportPdfGiorno = async (date) => {
+    const data = await db.get(date);
+    if (!data) { alert('Nessuna quadratura per questa data.'); return; }
+    const doc = buildPDF([{ date, ...data }]);
+    downloadPDF(doc, `quadratura_${date}.pdf`);
+  };
+
+  const exportPdfPeriodo = async (from, to, label) => {
+    const all = await db.getAll();
+    const filtered = all.filter(it => it.date >= from && it.date <= to)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (filtered.length === 0) { alert('Nessuna quadratura in questo periodo.'); return; }
+    const doc = buildPDF(filtered);
+    downloadPDF(doc, `quadrature_${label.replace(/\s+/g, '_').toLowerCase()}.pdf`);
+  };
+
+  const exportPdfOggi = () => exportPdfGiorno(today());
+
+  const exportPdfSettimana = async () => {
+    const d = new Date();
+    const day = d.getDay() || 7;
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - day + 1);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    await exportPdfPeriodo(toLocalISO(monday), toLocalISO(sunday), `settimana_${toLocalISO(monday)}`);
+  };
+
+  const exportPdfMese = async () => {
+    const d = new Date();
+    const from = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`;
+    const lastDay = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+    const to = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+    await exportPdfPeriodo(from, to, `${monthName(d.getMonth())}_${d.getFullYear()}`);
+  };
+
+  const exportPdfTutto = async () => {
+    const all = await db.getAll();
+    if (all.length === 0) { alert('Archivio vuoto.'); return; }
+    const doc = buildPDF(all);
+    downloadPDF(doc, `archivio_completo_${today()}.pdf`);
+  };
+
   const importJSON = async (file) => {
     try {
       const text = await file.text();
@@ -1403,9 +1701,46 @@ function App() {
               {exportMenuOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setExportMenuOpen(false)} />
-                  <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-slate-200 rounded-lg shadow-xl z-20 overflow-hidden text-slate-800">
-                    <div className="px-3 py-2 text-xs uppercase tracking-wider text-slate-500 font-semibold bg-slate-50 border-b border-slate-200">
-                      Excel per cartella condivisa
+                  <div className="absolute right-0 top-full mt-2 w-80 bg-white border border-slate-200 rounded-lg shadow-xl z-20 overflow-hidden text-slate-800 max-h-[80vh] overflow-y-auto">
+                    {/* PDF */}
+                    <div className="px-3 py-2 text-xs uppercase tracking-wider text-slate-500 font-semibold bg-rose-50 border-b border-rose-100 flex items-center gap-2">
+                      <FileText size={13} className="text-rose-600" /> PDF (non modificabile, per archivio)
+                    </div>
+                    <button onClick={() => { setExportMenuOpen(false); exportPdfOggi(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-rose-50 text-sm flex items-center gap-2 transition">
+                      <FileText size={16} className="text-rose-600" />
+                      <div>
+                        <div className="font-medium">Quadratura di oggi</div>
+                        <div className="text-xs text-slate-500">Solo {fmtDateIT(today())}</div>
+                      </div>
+                    </button>
+                    <button onClick={() => { setExportMenuOpen(false); exportPdfGiorno(selectedDate); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-rose-50 text-sm flex items-center gap-2 transition">
+                      <FileText size={16} className="text-rose-600" />
+                      <div>
+                        <div className="font-medium">Giorno selezionato</div>
+                        <div className="text-xs text-slate-500">{fmtDateIT(selectedDate)}</div>
+                      </div>
+                    </button>
+                    <button onClick={() => { setExportMenuOpen(false); exportPdfSettimana(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-rose-50 text-sm flex items-center gap-2 transition">
+                      <CalendarIcon size={16} className="text-rose-600" />
+                      <div className="font-medium">Settimana corrente</div>
+                    </button>
+                    <button onClick={() => { setExportMenuOpen(false); exportPdfMese(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-rose-50 text-sm flex items-center gap-2 transition">
+                      <CalendarIcon size={16} className="text-rose-600" />
+                      <div className="font-medium">Mese corrente</div>
+                    </button>
+                    <button onClick={() => { setExportMenuOpen(false); exportPdfTutto(); }}
+                      className="w-full text-left px-3 py-2.5 hover:bg-rose-50 text-sm flex items-center gap-2 transition border-b border-slate-100">
+                      <FileText size={16} className="text-rose-600" />
+                      <div className="font-medium">Tutto l'archivio</div>
+                    </button>
+
+                    {/* Excel */}
+                    <div className="px-3 py-2 text-xs uppercase tracking-wider text-slate-500 font-semibold bg-emerald-50 border-b border-t border-emerald-100 flex items-center gap-2">
+                      <FileSpreadsheet size={13} className="text-emerald-600" /> Excel (modificabile)
                     </div>
                     <button onClick={() => { setExportMenuOpen(false); exportExcelOggi(); }}
                       className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 text-sm flex items-center gap-2 transition">
@@ -1419,7 +1754,7 @@ function App() {
                       className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 text-sm flex items-center gap-2 transition">
                       <FileSpreadsheet size={16} className="text-emerald-600" />
                       <div>
-                        <div className="font-medium">Quadratura del giorno selezionato</div>
+                        <div className="font-medium">Giorno selezionato</div>
                         <div className="text-xs text-slate-500">{fmtDateIT(selectedDate)}</div>
                       </div>
                     </button>
@@ -1438,6 +1773,8 @@ function App() {
                       <FileSpreadsheet size={16} className="text-emerald-600" />
                       <div className="font-medium">Tutto l'archivio</div>
                     </button>
+
+                    {/* Backup */}
                     <div className="px-3 py-2 text-xs uppercase tracking-wider text-slate-500 font-semibold bg-slate-50 border-b border-t border-slate-200">
                       Backup tecnico
                     </div>
