@@ -16,7 +16,7 @@
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
     "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1",
     "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
-    "xlsx": "https://esm.sh/xlsx@0.18.5"
+    "xlsx": "https://esm.sh/xlsx-js-style@1.2.0"
   }
 }
 </script>
@@ -1022,18 +1022,16 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Conversione record → riga Excel piatta
+  // Conversione record → riga Excel piatta (per il foglio riepilogo orizzontale)
   const flattenForExcel = (it) => {
     const c = calc(it);
     const okIncassi = Math.abs(c.quadraturaIncassi) < 0.02;
     const okContante = Math.abs(c.quadraturaContante) < 0.02;
-    // Data come oggetto Date così Excel la riconosce come data ordinabile
     const [yy, mm, dd] = (it.date || '').split('-').map(Number);
     const dataDate = (yy && mm && dd) ? new Date(yy, mm - 1, dd) : null;
     return {
       'Data': dataDate || it.date || '',
       'Operatori': it.operatori || '',
-      // Modalità di pagamento
       'Contanti': num(it.incassi?.contanti),
       'POS': num(it.incassi?.pos),
       'Satispay': num(it.incassi?.satispay),
@@ -1042,17 +1040,14 @@ function App() {
       'Buoni industriali': num(it.incassi?.buoniIndustriali),
       'Arrotondamenti': num(it.incassi?.arrotondamenti),
       'Totale incassi': c.totIncassi,
-      // Corrispettivi
       'Corrispettivi scontrini': c.corrispettivi,
       'PagoPA': c.pagopa,
       'Resi emessi': c.resiEmessi,
       'Totale corrispettivi': c.totCorrispettivi,
       'Quadr. incassi': c.quadraturaIncassi,
       'Esito incassi': okIncassi ? 'OK' : 'KO',
-      // Apertura
       'Apertura cassaforte': c.apCassaforte,
       'Apertura glory': c.apGlory,
-      // Movimenti
       'Consegna monete': num(it.movimenti?.consegnaMonete),
       'Spese cash': num(it.movimenti?.speseCash),
       'Versamento banca': num(it.movimenti?.versamentoBanca),
@@ -1060,7 +1055,6 @@ function App() {
       'Ritiro valori': num(it.movimenti?.ritiroValori),
       'Rifornimento glory': num(it.interni?.rifornimentoGlory),
       'Svuotamento glory': num(it.interni?.svuotamentoGlory),
-      // Chiusura
       'Teorico cassaforte': c.teoricoCassaforte,
       'Teorico glory': c.teoricoGlory,
       'Fisico cassaforte': c.fisCassaforte,
@@ -1074,34 +1068,238 @@ function App() {
     };
   };
 
-  const buildWorkbook = (records, sheetName = 'Quadrature') => {
+  // ===== FOGLIO VERTICALE (riproduce il layout della webdesk) =====
+  // Palette stili AOA (per SheetJS write con cellStyles non garantito su CDN base,
+  // quindi usiamo struttura + formati numerici + merge; i colori via fill quando supportati)
+  const EURO_Z = '#,##0.00 "€"';
+
+  const buildDaySheet = (it) => {
+    const c = calc(it);
+    const okIncassi = Math.abs(c.quadraturaIncassi) < 0.02;
+    const okContante = Math.abs(c.quadraturaContante) < 0.02;
+    const v = (x) => num(x);
+
+    // Costruisco array di righe [label, valore]
+    // Uso marcatori di tipo per applicare stili dopo
+    const rows = [];
+    const meta = []; // tiene traccia del "ruolo" di ogni riga per lo styling
+
+    const pushSection = (title) => {
+      rows.push([title, null]);
+      meta.push({ type: 'section' });
+    };
+    const pushItem = (label, value, opts = {}) => {
+      rows.push([label, value]);
+      meta.push({ type: 'item', money: opts.money !== false, ...opts });
+    };
+    const pushTotal = (label, value, opts = {}) => {
+      rows.push([label, value]);
+      meta.push({ type: 'total', money: true, ...opts });
+    };
+    const pushSpacer = () => {
+      rows.push([null, null]);
+      meta.push({ type: 'spacer' });
+    };
+    const pushHeader = (label, value) => {
+      rows.push([label, value]);
+      meta.push({ type: 'header' });
+    };
+
+    // Intestazione
+    pushHeader('QUADRATURA CASSA — FIDAMAR', null);
+    pushItem('Data', fmtDateIT(it.date), { money: false });
+    pushItem('Operatori', it.operatori || '—', { money: false });
+    pushSpacer();
+
+    // 1. Incassi per forma di pagamento
+    pushSection('INCASSI PER FORMA DI PAGAMENTO');
+    pushItem('Contanti', v(it.incassi?.contanti));
+    pushItem('POS / Carte', v(it.incassi?.pos));
+    pushItem('Satispay', v(it.incassi?.satispay));
+    pushItem('Ticket pasto', v(it.incassi?.ticket));
+    pushItem('Buoni resi riscossi', v(it.incassi?.buoniResiRiscossi));
+    pushItem('Buoni industriali', v(it.incassi?.buoniIndustriali));
+    pushItem('Arrotondamenti', v(it.incassi?.arrotondamenti));
+    pushTotal('TOTALE INCASSI', c.totIncassi);
+    pushSpacer();
+
+    // 2. Corrispettivi
+    pushSection('CORRISPETTIVI (VERIFICA INCASSI)');
+    pushItem('Corrispettivi da scontrini', c.corrispettivi);
+    pushItem('PagoPA', c.pagopa);
+    pushItem('Resi emessi', c.resiEmessi);
+    pushTotal('TOTALE CORRISPETTIVI', c.totCorrispettivi);
+    pushTotal('QUADRATURA INCASSI', c.quadraturaIncassi, { esito: okIncassi });
+    pushItem('Esito incassi', okIncassi ? 'OK ✓' : 'KO ✗', { money: false, esito: okIncassi });
+    pushSpacer();
+
+    // 3. Apertura
+    pushSection('FONDO APERTURA');
+    pushItem('Cassaforte', c.apCassaforte);
+    pushItem('Glory', c.apGlory);
+    pushTotal('TOTALE APERTURA', c.totApertura);
+    pushSpacer();
+
+    // 4. Movimenti contante entrata/uscita
+    pushSection('MOVIMENTI CONTANTE');
+    pushItem('Consegna monete (entrata cassaforte)', v(it.movimenti?.consegnaMonete));
+    pushItem('Spese cash (uscita cassaforte)', v(it.movimenti?.speseCash));
+    pushItem('Versamento banca (uscita cassaforte)', v(it.movimenti?.versamentoBanca));
+    pushItem('Rimborsi cash (uscita cassaforte)', v(it.movimenti?.rimborsiCash));
+    pushItem('Ritiro valori (uscita glory)', v(it.movimenti?.ritiroValori));
+    pushSpacer();
+
+    // 5. Trasferimenti interni
+    pushSection('TRASFERIMENTI INTERNI');
+    pushItem('Rifornimento glory (cassaforte → glory)', v(it.interni?.rifornimentoGlory));
+    pushItem('Svuotamento glory (glory → cassaforte)', v(it.interni?.svuotamentoGlory));
+    pushSpacer();
+
+    // 6. Chiusura fisica
+    pushSection('FONDO FISICO CHIUSURA');
+    pushItem('Cassaforte conteggiata', c.fisCassaforte);
+    pushItem('Glory', c.fisGlory);
+    pushTotal('TOTALE FISICO', c.fisicoTot);
+    pushSpacer();
+
+    // 7. Quadratura contante
+    pushSection('QUADRATURA CONTANTE');
+    pushItem('Teorico cassaforte', c.teoricoCassaforte);
+    pushItem('Teorico glory', c.teoricoGlory);
+    pushTotal('TOTALE TEORICO', c.teoricoTot);
+    pushTotal('TOTALE FISICO', c.fisicoTot);
+    pushItem('Differenza cassaforte', c.diffCassaforte);
+    pushItem('Differenza glory', c.diffGlory);
+    pushTotal('QUADRATURA CONTANTE', c.quadraturaContante, { esito: okContante });
+    pushItem('Esito contante', okContante ? 'OK ✓' : 'KO ✗', { money: false, esito: okContante });
+    pushSpacer();
+
+    // Note
+    pushSection('NOTE');
+    pushItem(it.note || '—', null, { money: false, fullwidth: true });
+
+    // Costruisco worksheet da AOA
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{ wch: 42 }, { wch: 18 }];
+
+    // Applico formati e stili cella per cella
+    const merges = [];
+    for (let R = 0; R < rows.length; R++) {
+      const m = meta[R];
+      const cellA = ws[XLSX.utils.encode_cell({ r: R, c: 0 })];
+      const cellB = ws[XLSX.utils.encode_cell({ r: R, c: 1 })];
+
+      if (m.type === 'header') {
+        merges.push({ s: { r: R, c: 0 }, e: { r: R, c: 1 } });
+        if (cellA) cellA.s = {
+          font: { bold: true, sz: 14, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '0F172A' } },
+          alignment: { horizontal: 'center', vertical: 'center' }
+        };
+      } else if (m.type === 'section') {
+        merges.push({ s: { r: R, c: 0 }, e: { r: R, c: 1 } });
+        if (cellA) cellA.s = {
+          font: { bold: true, sz: 11, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '1F3864' } },
+          alignment: { horizontal: 'left', vertical: 'center' }
+        };
+      } else if (m.type === 'total') {
+        const esitoColor = m.esito === true ? '006100' : (m.esito === false ? '9C0006' : '1F3864');
+        const esitoFill = m.esito === true ? 'C6EFCE' : (m.esito === false ? 'FFC7CE' : 'D9E2F3');
+        if (cellA) cellA.s = {
+          font: { bold: true, sz: 11, color: { rgb: esitoColor } },
+          fill: { fgColor: { rgb: esitoFill } }
+        };
+        if (cellB) {
+          cellB.s = {
+            font: { bold: true, sz: 11, color: { rgb: esitoColor } },
+            fill: { fgColor: { rgb: esitoFill } },
+            alignment: { horizontal: 'right' }
+          };
+          if (m.money && typeof cellB.v === 'number') { cellB.t = 'n'; cellB.z = EURO_Z; }
+        }
+      } else if (m.type === 'item') {
+        const thinBorder = { style: 'thin', color: { rgb: 'E2E8F0' } };
+        const borders = { bottom: thinBorder };
+        if (m.fullwidth) {
+          merges.push({ s: { r: R, c: 0 }, e: { r: R, c: 1 } });
+          if (cellA) cellA.s = { alignment: { horizontal: 'left', wrapText: true, vertical: 'top' } };
+        } else {
+          const esitoColor = m.esito === true ? '006100' : (m.esito === false ? '9C0006' : '334155');
+          if (cellA) cellA.s = { font: { sz: 10, color: { rgb: '334155' } }, alignment: { horizontal: 'left' }, border: borders };
+          if (cellB) {
+            cellB.s = {
+              font: { sz: 10, color: { rgb: esitoColor }, bold: m.esito !== undefined },
+              alignment: { horizontal: 'right' },
+              border: borders
+            };
+            if (m.money && typeof cellB.v === 'number') { cellB.t = 'n'; cellB.z = EURO_Z; }
+          }
+        }
+      }
+    }
+    ws['!merges'] = merges;
+    // Altezze righe: header alto, sezioni medie
+    const rowHeights = meta.map(m => {
+      if (m.type === 'header') return { hpt: 28 };
+      if (m.type === 'section') return { hpt: 20 };
+      if (m.type === 'spacer') return { hpt: 6 };
+      return { hpt: 16 };
+    });
+    ws['!rows'] = rowHeights;
+    return ws;
+  };
+
+  // ===== FOGLIO RIEPILOGO (orizzontale, tabellare) =====
+  const buildSummarySheet = (records) => {
     const rows = records.map(flattenForExcel);
     const ws = XLSX.utils.json_to_sheet(rows, { cellDates: true });
-    // Larghezza colonne automatica (ragionevole)
-    const colWidths = Object.keys(rows[0] || {}).map(k => ({
-      wch: Math.max(k.length, 14)
-    }));
+    const colWidths = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 14) }));
     ws['!cols'] = colWidths;
-    // Formato celle: date e numeri Euro
     const range = XLSX.utils.decode_range(ws['!ref']);
     const headerRow = rows[0] ? Object.keys(rows[0]) : [];
     const textCols = ['Data', 'Operatori', 'Esito incassi', 'Esito contante', 'Stato giornata', 'Note'];
+    // Header styling
+    for (let C = 0; C <= range.e.c; ++C) {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c: C })];
+      if (cell) cell.s = {
+        font: { bold: true, sz: 10, color: { rgb: 'FFFFFF' } },
+        fill: { fgColor: { rgb: '1F3864' } },
+        alignment: { horizontal: 'center', wrapText: true }
+      };
+    }
     for (let R = 1; R <= range.e.r; ++R) {
       for (let C = 0; C <= range.e.c; ++C) {
         const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
         if (!cell) continue;
         const header = headerRow[C] || '';
         if (header === 'Data' && cell.v instanceof Date) {
-          cell.t = 'd';
-          cell.z = 'dd/mm/yyyy';
+          cell.t = 'd'; cell.z = 'dd/mm/yyyy';
         } else if (!textCols.includes(header) && typeof cell.v === 'number') {
-          cell.t = 'n';
-          cell.z = '#,##0.00 "€"';
+          cell.t = 'n'; cell.z = EURO_Z;
         }
       }
     }
+    ws['!freeze'] = { xSplit: 1, ySplit: 1 };
+    return ws;
+  };
+
+  // Nome foglio valido (max 31 char, no caratteri vietati)
+  const safeSheetName = (name) => name.replace(/[\\/?*\[\]:]/g, '-').slice(0, 31);
+
+  const buildWorkbook = (records) => {
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    const sorted = [...records].sort((a, b) => a.date.localeCompare(b.date));
+    // Un foglio per ogni giorno
+    sorted.forEach(it => {
+      const ws = buildDaySheet(it);
+      XLSX.utils.book_append_sheet(wb, ws, safeSheetName(fmtDateIT(it.date)));
+    });
+    // Foglio riepilogo solo se più di un giorno
+    if (sorted.length > 1) {
+      const summary = buildSummarySheet(sorted);
+      XLSX.utils.book_append_sheet(wb, summary, 'Riepilogo');
+    }
     return wb;
   };
 
@@ -1113,7 +1311,7 @@ function App() {
   const exportExcelGiorno = async (date) => {
     const data = await db.get(date);
     if (!data) { alert('Nessuna quadratura per questa data.'); return; }
-    const wb = buildWorkbook([{ date, ...data }], `Q. ${fmtDateIT(date)}`);
+    const wb = buildWorkbook([{ date, ...data }]);
     downloadWorkbook(wb, `quadratura_${date}.xlsx`);
   };
 
@@ -1122,7 +1320,7 @@ function App() {
     const filtered = all.filter(it => it.date >= from && it.date <= to)
       .sort((a, b) => a.date.localeCompare(b.date));
     if (filtered.length === 0) { alert('Nessuna quadratura in questo periodo.'); return; }
-    const wb = buildWorkbook(filtered, label.slice(0, 31));
+    const wb = buildWorkbook(filtered);
     downloadWorkbook(wb, `quadrature_${label.replace(/\s+/g, '_').toLowerCase()}.xlsx`);
   };
 
@@ -1152,7 +1350,7 @@ function App() {
     const all = await db.getAll();
     if (all.length === 0) { alert('Archivio vuoto.'); return; }
     const sorted = [...all].sort((a, b) => a.date.localeCompare(b.date));
-    const wb = buildWorkbook(sorted, 'Archivio completo');
+    const wb = buildWorkbook(sorted);
     downloadWorkbook(wb, `archivio_completo_${today()}.xlsx`);
   };
 
