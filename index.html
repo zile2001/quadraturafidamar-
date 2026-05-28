@@ -16,7 +16,7 @@
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
     "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1",
     "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
-    "xlsx": "https://esm.sh/xlsx-js-style@1.2.0"
+    "xlsx": "https://esm.sh/xlsx-js-style@1.2.0?bundle"
   }
 }
 </script>
@@ -34,7 +34,10 @@
 <script type="text/babel" data-type="module" data-presets="react">
 import React, { useState, useEffect, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
-import * as XLSX from 'xlsx';
+import * as XLSXns from 'xlsx';
+// xlsx-js-style su esm.sh può esportare la libreria sotto .default:
+// normalizzo così XLSX.utils esiste sempre.
+const XLSX = (XLSXns && XLSXns.utils) ? XLSXns : (XLSXns.default || XLSXns);
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, PieChart, Pie, Cell } from 'recharts';
 import {
   Archive, BarChart3, Save, Trash2, Download, Upload, ChevronLeft, ChevronRight,
@@ -1288,6 +1291,10 @@ function App() {
   const safeSheetName = (name) => name.replace(/[\\/?*\[\]:]/g, '-').slice(0, 31);
 
   const buildWorkbook = (records) => {
+    if (!XLSX || !XLSX.utils) {
+      alert('La libreria Excel non si è caricata correttamente. Controlla la connessione e ricarica la pagina.');
+      throw new Error('XLSX.utils undefined');
+    }
     const wb = XLSX.utils.book_new();
     const sorted = [...records].sort((a, b) => a.date.localeCompare(b.date));
     // Un foglio per ogni giorno
