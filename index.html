@@ -1005,6 +1005,8 @@ function App() {
   const [items, setItems] = useState([]);
   const [refreshKey, setRefreshKey] = useState(0);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
   const [lastExportDate, setLastExportDate] = useState(() => localStorage.getItem('lastExportDate') || '');
 
   // Aggiorna data ultimo export quando cambia (per banner promemoria)
@@ -1685,6 +1687,31 @@ function App() {
     downloadPDF(doc, `archivio_completo_${today()}.pdf`);
   };
 
+  // Export intervallo personalizzato (Da / A)
+  const validateRange = () => {
+    if (!rangeFrom || !rangeTo) {
+      alert('Seleziona entrambe le date (Da e A).');
+      return null;
+    }
+    let from = rangeFrom, to = rangeTo;
+    if (from > to) { [from, to] = [to, from]; } // inverto se sbagliate
+    return { from, to };
+  };
+
+  const exportRangePdf = async () => {
+    const r = validateRange();
+    if (!r) return;
+    setExportMenuOpen(false);
+    await exportPdfPeriodo(r.from, r.to, `dal_${r.from}_al_${r.to}`);
+  };
+
+  const exportRangeExcel = async () => {
+    const r = validateRange();
+    if (!r) return;
+    setExportMenuOpen(false);
+    await exportExcelPeriodo(r.from, r.to, `dal_${r.from}_al_${r.to}`);
+  };
+
   const importJSON = async (file) => {
     try {
       const text = await file.text();
@@ -1806,6 +1833,35 @@ function App() {
                       <FileSpreadsheet size={16} className="text-emerald-600" />
                       <div className="font-medium">Tutto l'archivio</div>
                     </button>
+
+                    {/* Intervallo personalizzato */}
+                    <div className="px-3 py-2 text-xs uppercase tracking-wider text-slate-500 font-semibold bg-blue-50 border-b border-t border-blue-100 flex items-center gap-2">
+                      <CalendarIcon size={13} className="text-[#00327D]" /> Intervallo personalizzato
+                    </div>
+                    <div className="px-3 py-3 space-y-2" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-slate-500 w-8">Da</label>
+                        <input type="date" value={rangeFrom}
+                          onChange={e => setRangeFrom(e.target.value)}
+                          className="flex-1 text-sm border border-slate-200 rounded px-2 py-1.5 focus:outline-none focus:border-[#00327D]" />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-slate-500 w-8">A</label>
+                        <input type="date" value={rangeTo}
+                          onChange={e => setRangeTo(e.target.value)}
+                          className="flex-1 text-sm border border-slate-200 rounded px-2 py-1.5 focus:outline-none focus:border-[#00327D]" />
+                      </div>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button onClick={exportRangePdf}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded text-xs font-semibold transition border border-rose-200">
+                          <FileText size={14} /> PDF
+                        </button>
+                        <button onClick={exportRangeExcel}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded text-xs font-semibold transition border border-emerald-200">
+                          <FileSpreadsheet size={14} /> Excel
+                        </button>
+                      </div>
+                    </div>
 
                     {/* Backup */}
                     <div className="px-3 py-2 text-xs uppercase tracking-wider text-slate-500 font-semibold bg-slate-50 border-b border-t border-slate-200">
